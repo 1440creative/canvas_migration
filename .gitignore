@@ -1,0 +1,12 @@
+# ignore env
+.env
+
+# python cache
+__pycache__/
+*.pyc
+
+# os files
+.DS_Store
+
+# venvs
+venv/
