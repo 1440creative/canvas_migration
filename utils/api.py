@@ -32,7 +32,36 @@ class CanvasAPI:
             if 'link' in r.headers:
                 for link in r.headers['link'].split(','):
                     if 'rel="next"' in link:
-                        url = link[link.link.find('<')+1:link.find('>')]
+                        url = link[link.find('<')+1:link.find('>')]
                         break
         return results
+    
+    def post(self, endpoint, payload=None, files=None):
+        url = urljoin(self.base_url, endpoint.lstrip('/'))
+        r = self.session.post(url, json=payload, files=files)
+        r.raise_for_status()
+        return r.json()
+    
+    def put(self, endpoint, payload=None):
+        url = urljoin(self.base_url, endpoint.lstrip('/'))
+        r = self.session.put(url, json=payload)
+        r.raise_for_status()
+        return r.json()
+    
+    def delete(self, endpoint):
+        url = urljoin(self.base_url, endpoint.lstrip('/'))
+        r = self.session.delete(url)
+        r.raise_for_status()
+        return r.json() if r.text else None
+    
+# instatiate two API clients (on-premise, cloud)
+source_api = CanvasAPI(
+    os.getenv("CANVAS_SOURCE_URL"),
+    os.getenv("CANVAS_SOURCE_TOKEN")
+)
+
+target_api = CanvasAPI(
+    os.getenv("CANVAS_TARGET_URL"),
+    os.getenv("CANVAS_TARGET_TOKEN")
+)
                 
