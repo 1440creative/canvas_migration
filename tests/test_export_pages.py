@@ -4,10 +4,6 @@ import pytest
 import requests_mock
 from export.export_pages import export_pages
 
-@pytest.fixture
-def tmp_output(tmp_path):
-    return tmp_path
-
 def test_export_pages_creates_files_and_metadata(tmp_output, requests_mock):
     course_id = 101
     # Mock the pages list
