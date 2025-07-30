@@ -1,10 +1,10 @@
 from utils.api import source_api
+from utils.pagination import fetch_all
 import os
 import json
 
 def export_pages(course_id, output_dir="export/data"):
-    pages = source_api.get(f"/courses/{course_id}/pages")
-    print("Pages response:", pages) #debug
+    pages = fetch_all(f"/courses/{course_id}/pages")
     course_dir = os.path.join(output_dir, str(course_id), "pages")
     os.makedirs(course_dir, exist_ok=True)
     
