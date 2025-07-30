@@ -4,6 +4,7 @@ import json
 
 def export_pages(course_id, output_dir="export/data"):
     pages = source_api.get(f"/courses/{course_id}/pages")
+    print("Pages response:", pages) #debug
     course_dir = os.path.join(output_dir, str(course_id), "pages")
     os.makedirs(course_dir, exist_ok=True)
     
@@ -11,7 +12,7 @@ def export_pages(course_id, output_dir="export/data"):
     
     for page in pages:
         slug = page["url"]
-        page_detail = source_api.get(f"/course/{course_id}/pages/{slug}")
+        page_detail = source_api.get(f"/courses/{course_id}/pages/{slug}")
         html_body = page_detail.get("body", "")
         
         # Save HTML
