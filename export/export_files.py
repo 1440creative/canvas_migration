@@ -37,6 +37,7 @@ def export_files(course_id, output_dir="export/data"):
     # download content
     r = requests.get(download_url)
     if r.status_code == 200:
+            print("Saving file:", file_path)
             with open(file_path, "wb") as out:
                 out.write(r.content)
     else:
