@@ -3,11 +3,13 @@ import json
 import requests
 from utils.api import source_api
 from utils.pagination import fetch_all
+from pathlib import Path
+from typing import Any
 
 # 🔧 Configurable root folder for files with no folder mapping
 ROOT_FOLDER_NAME = "Course Files"
 
-def export_files(course_id, output_dir="export/data"):
+def export_files(course_id: int, output_dir: Path = Path("export/data")) -> None:
     """
     Export all files and folder metadata for a course.
     Downloads files and preserves folder structure, including root-level files.

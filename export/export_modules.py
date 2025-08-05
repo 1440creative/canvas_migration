@@ -2,8 +2,10 @@
 import os, json
 from utils.pagination import fetch_all
 from utils.api import source_api
+from pathlib import Path
+from typing import Any
 
-def export_modules(course_id, output_dir="export/data"):
+def export_modules(course_id: int, output_dir: Path = Path("export/data")) -> None:
     modules = fetch_all(f"/courses/{course_id}/modules")
     course_dir = os.path.join(output_dir, str(course_id), "modules")
     os.makedirs(course_dir, exist_ok=True)
