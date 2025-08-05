@@ -13,7 +13,7 @@ def export_blueprint_settings(course_id: int, output_dir: str = "export/data") -
         output_dir (str): Output directory
     """
     response = source_api.get(f"/courses/{course_id}/blueprint_templates/default")
-    blueprint_data = response.json()
+    blueprint_data = response
 
     base_path = Path(output_dir) / str(course_id)
     base_path.mkdir(parents=True, exist_ok=True)
