@@ -1,7 +1,9 @@
 import os, json
 from utils.pagination import fetch_all
+from pathlib import Path
+from typing import Any
 
-def export_discussions(course_id, output_dir="export/data"):
+def export_discussions(course_id: int, output_dir: Path = Path("export/data")) -> None:
     discussions = fetch_all(f"/courses/{course_id}/discussion_topics")
     course_dir = os.path.join(output_dir, str(course_id), "discussions")
     os.makedirs(course_dir, exist_ok=True)
