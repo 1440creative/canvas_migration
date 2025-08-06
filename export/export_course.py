@@ -28,3 +28,13 @@ def export_course(course_id: int, output_dir: str) -> None:
     export_blueprint_settings(course_id, output_path)
     
     print(f"Export complete: {output_path}")
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Export a Canvas course")
+    parser.add_argument("course_id", type=int, help="Canvas course ID")
+    parser.add_argument("output_dir", help="Directory to save course export")
+
+    args = parser.parse_args()
+    export_course(args.course_id, args.output_dir)
