@@ -1,38 +1,43 @@
+# import os
+# import json
+
 from utils.api import source_api
 from utils.pagination import fetch_all
-import os
-import json
+from utils.logging import logger
+from utils.fs import save_json
 from pathlib import Path
-from typing import Any
 
-def export_pages(course_id: int, output_dir: Path = Path("export/data")) -> None:
+def export_pages(course_id: int, output_dir: Path = Path("export/data")) -> list[dict]:
+    logger.info(f"Exporting pages for course {course_id} to {output_dir}")   
     pages = fetch_all(f"/courses/{course_id}/pages")
-    course_dir = os.path.join(output_dir, str(course_id), "pages")
-    os.makedirs(course_dir, exist_ok=True)
+    metadata_list = []
     
-    metadata = []
+    course_dir = output_dir / str(course_id) / "pages"
+    course_dir.mkdir(parents=True, exist_ok=True)
     
     for page in pages:
         slug = page["url"]
+        logger.debug(f"Fetching page '{slug}'")
         page_detail = source_api.get(f"/courses/{course_id}/pages/{slug}")
-        html_body = page_detail.get("body", "")
+        #html_body = page_detail.get("body", "")
         
         # Save HTML
-        file_path = os.path.join(course_dir, f"{slug}.html")
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(html_body)
+        file_path = course_dir / f"{slug}.html"
+        with file_path.open("w", encoding="utf-8") as f:
+            f.write(page_detail.get("body", ""))
+        logger.debug(f"Saved page '{slug}' content to {file_path}")
             
-        metadata.append({
-            "title": page["title"],
+        # build metadata dict
+        metadata_list.append({
             "slug": slug,
-            "url": page_detail["html_url"],
-            "page_id": page_detail["page_id"],
-            "published": page_detail["published"]
+            "title": page_detail.get("title"),
+            "page_id": page_detail.get("page_id"),
+            "published": page_detail.get("published", False),
+            "html_url": page_detail.get("html_url")
         })
     #persist metadata
-    meta_file = os.path.join(output_dir, str(course_id), "pages_metadata.json")
-    with open(meta_file, "w", encoding="utf=8") as f:
-        json.dump(metadata, f, indent=2)
-        
-    print(f"Exported {len(metadata)} pages for course {course_id}")
-    return metadata
+    metadata_path = output_dir / str(course_id) / "pages_metadata.json"
+    save_json(metadata_list, metadata_path)
+    logger.info(f"Exported {len(pages)} pages for course {course_id}, metadata saved to {metadata_path}")
+
+    return metadata_list
