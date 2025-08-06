@@ -1,11 +1,11 @@
 from export.export_pages import export_pages
 from export.export_modules import export_modules
 from export.export_assignments import export_assignments
+from export.export_quizzes import export_quizzes
 from export.export_discussions import export_discussions
 from export.export_files import export_files
 from export.export_settings import export_settings
 from export.export_blueprint_settings import export_blueprint_settings
-
 from pathlib import Path
 
 def export_course(course_id: int, output_dir: str) -> None:
@@ -22,6 +22,7 @@ def export_course(course_id: int, output_dir: str) -> None:
     export_pages(course_id, output_path)
     export_modules(course_id, output_path)
     export_assignments(course_id, output_path)
+    export_quizzes(course_id, output_path)
     export_discussions(course_id, output_path)
     export_files(course_id, output_path)
     export_settings(course_id, output_path)
