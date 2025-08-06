@@ -7,13 +7,14 @@ from utils.logging import logger
 from utils.fs import save_json
 from pathlib import Path
 
-def export_pages(course_id: int, output_dir: Path = Path("export/data")) -> list[dict]:
+def export_pages(course_id: int, output_dir: Path | str = Path("export/data")) -> list[dict]:
     logger.info(f"Exporting pages for course {course_id} to {output_dir}")   
     pages = fetch_all(f"/courses/{course_id}/pages")
     metadata_list = []
     
+    output_dir = Path(output_dir)
     course_dir = output_dir / str(course_id) / "pages"
-    course_dir.mkdir(parents=True, exist_ok=True)
+    course_dir.mkdir(parents=True, exist_ok=True)  # <-- ensure output dir exists
     
     for page in pages:
         slug = page["url"]

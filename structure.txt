@@ -1,37 +1,54 @@
-canvas_migration/
-│
-├── config/
-│   └── settings.json            # API tokens, source/target account IDs, etc.
-│
-├── export/
-│   ├── export_course.py         # master export script
-│   ├── export_settings.py
-│   ├── export_modules.py
-│   ├── export_assignments.py
-│   ├── export_pages.py
-│   ├── export_files.py
-│   └── export_blueprint.py
-│
-├── transform/
-│   ├── link_rewriter.py         # replaces old course IDs with placeholders
-│   ├── html_sanitizer.py        # optional: cleanup HTML locally
-│   └── metadata_builder.py      # creates metadata.json for pages/modules
-│
-├── import/
-│   ├── import_course.py         # master import script
-│   ├── import_settings.py
-│   ├── import_modules.py
-│   ├── import_assignments.py
-│   ├── import_pages.py
-│   ├── import_files.py
-│   └── import_blueprint.py
-│
-├── utils/
-│   ├── api.py                   # Canvas API wrapper (auth, pagination, etc.)
-│   ├── file_io.py               # JSON/YAML read/write helpers
-│   ├── link_utils.py            # for relative/absolute link conversion
-│   └── logger.py                # consistent logging
-│
-└── scripts/
-    ├── batch_export.sh          # example bash script to export multiple courses
-    └── batch_import.sh          # same for import
+.
+├── .env
+├── .gitignore
+├── .pytest_cache
+│   ├── .gitignore
+│   ├── CACHEDIR.TAG
+│   ├── README.md
+│   └── v
+│       └── cache
+│           ├── lastfailed
+│           ├── nodeids
+│           └── stepwise
+├── config
+├── export
+│   ├── combine_metadata.py
+│   ├── data
+│   ├── export_assignments.py
+│   ├── export_blueprint_settings.py
+│   ├── export_course.py
+│   ├── export_discussions.py
+│   ├── export_files.py
+│   ├── export_modules.py
+│   ├── export_pages.py
+│   ├── export_quizzes.py
+│   └── export_settings.py
+├── import
+├── scripts
+├── structure_legacy.txt
+├── structure.txt
+├── tests
+│   ├── __init__.py
+│   ├── conftest.py
+│   ├── test_api.py
+│   ├── test_combine_metadata_pagination.py
+│   ├── test_combine_metadata.py
+│   ├── test_export_assignments.py
+│   ├── test_export_blueprint_settings.py
+│   ├── test_export_course.py
+│   ├── test_export_discussions.py
+│   ├── test_export_files.py
+│   ├── test_export_modules_pagination.py
+│   ├── test_export_modules.py
+│   ├── test_export_pages.py
+│   ├── test_export_quizzes.py
+│   └── test_export_settings.py
+├── transform
+└── utils
+    ├── __init__.py
+    ├── api.py
+    ├── fs.py
+    ├── logging.py
+    └── pagination.py
+
+12 directories, 40 files

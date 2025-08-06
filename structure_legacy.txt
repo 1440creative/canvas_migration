@@ -1,0 +1,37 @@
+canvas_migration/
+│
+├── config/
+│   └── settings.json            # API tokens, source/target account IDs, etc.
+│
+├── export/
+│   ├── export_course.py         # master export script
+│   ├── export_settings.py
+│   ├── export_modules.py
+│   ├── export_assignments.py
+│   ├── export_pages.py
+│   ├── export_files.py
+│   └── export_blueprint.py
+│
+├── transform/
+│   ├── link_rewriter.py         # replaces old course IDs with placeholders
+│   ├── html_sanitizer.py        # optional: cleanup HTML locally
+│   └── metadata_builder.py      # creates metadata.json for pages/modules
+│
+├── import/
+│   ├── import_course.py         # master import script
+│   ├── import_settings.py
+│   ├── import_modules.py
+│   ├── import_assignments.py
+│   ├── import_pages.py
+│   ├── import_files.py
+│   └── import_blueprint.py
+│
+├── utils/
+│   ├── api.py                   # Canvas API wrapper (auth, pagination, etc.)
+│   ├── file_io.py               # JSON/YAML read/write helpers
+│   ├── link_utils.py            # for relative/absolute link conversion
+│   └── logger.py                # consistent logging
+│
+└── scripts/
+    ├── batch_export.sh          # example bash script to export multiple courses
+    └── batch_import.sh          # same for import
