@@ -1,12 +1,19 @@
 # tests/test_export_blueprint_settings.py
 
-from export.export_blueprint_settings import export_blueprint_settings
 import json
+from export.export_blueprint_settings import export_blueprint_settings
+from utils.api import source_api # needed to patch base_url
+
 
 def test_export_blueprint_settings(tmp_path, requests_mock):
     course_id = 606
-    blueprint_url = f"https://canvas.sfu.ca/api/v1/courses/{course_id}/blueprint_templates/default"
+    
+    # Patch the base_url used by source_api to match the mocked URL
+    source_api.base_url = "https://canvas.sfu.ca/api/v1/"
 
+    # Construct the URL that will be called in the function
+    blueprint_url = f"https://canvas.sfu.ca/api/v1/courses/{course_id}/blueprint_templates/default"
+    
     mock_data = {
         "id": 123,
         "course_id": course_id,

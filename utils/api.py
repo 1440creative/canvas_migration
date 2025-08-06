@@ -18,7 +18,10 @@ class CanvasAPI:
         
     def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         """Get request with pagination support"""
-        url = urljoin(self.base_url, endpoint.lstrip('/'))
+        # Remove leading slashes from endpoint to avoid urljoin dropping base path
+        clean_endpoint = endpoint.lstrip("/")
+        url = urljoin(self.base_url, clean_endpoint)
+        #url = urljoin(self.base_url, endpoint.lstrip('/'))
         results: List[Dict[str, Any]] = []
         while url:
             r = self.session.get(url, params=params)
