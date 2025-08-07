@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 from utils.pagination import fetch_all
 from utils.logging import logger
-from combine_metadata import combine_metadata
+from export.combine_metadata import combine_metadata
 
 def export_assignments(course_id: int, output_dir: Path = Path("export/data")) -> List[Dict[str, Any]]:
     logger.info(f"Exporting assignments for course {course_id} to {output_dir}")
