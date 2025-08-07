@@ -10,3 +10,7 @@ __pycache__/
 
 # venvs
 venv/
+
+# Ignore exported course data
+export/data/
+export/test_data/
