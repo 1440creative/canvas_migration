@@ -1,12 +1,17 @@
-import os, json
-from utils.pagination import fetch_all
+import json, logging
 from pathlib import Path
-from typing import Any
+from typing import List, Dict, Any
+from utils.pagination import fetch_all
+from utils.logging import logger
+from combine_metadata import combine_metadata
 
-def export_assignments(course_id: int, output_dir: Path = Path("export/data")) -> None:
+def export_assignments(course_id: int, output_dir: Path = Path("export/data")) -> List[Dict[str, Any]]:
+    logger.info(f"Exporting assignments for course {course_id} to {output_dir}")
+
+    course_dir = output_dir / str(course_id) / "assignments"
+    course_dir.mkdir(parents=True, exist_ok=True)
+    
     assignments = fetch_all(f"/courses/{course_id}/assignments")
-    course_dir = os.path.join(output_dir, str(course_id), "assignments")
-    os.makedirs(course_dir, exist_ok=True)
 
     metadata = []
 
@@ -15,8 +20,8 @@ def export_assignments(course_id: int, output_dir: Path = Path("export/data")) -
         body = a.get("description", "")
 
         # Save HTML description
-        file_path = os.path.join(course_dir, f"{slug}.html")
-        with open(file_path, "w", encoding="utf-8") as f:
+        file_path = course_dir / f"{slug}.html"
+        with file_path.open("w", encoding="utf-8") as f:
             f.write(body or "")
 
         metadata.append({
@@ -28,9 +33,13 @@ def export_assignments(course_id: int, output_dir: Path = Path("export/data")) -
             "html_file": f"{slug}.html"
         })
 
-    meta_file = os.path.join(output_dir, str(course_id), "assignments_metadata.json")
-    with open(meta_file, "w", encoding="utf-8") as f:
+    meta_file = output_dir / str(course_id) / "assignments_metadata.json"
+    with meta_file.open("w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"Exported {len(metadata)} assignments for course {course_id}")
+    logger.info(f"Exported {len(metadata)} assignments for course {course_id}")
+
+    # Update combined metadata JSON
+    combine_metadata(course_id, output_dir=output_dir)
+
     return metadata
