@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import List, Dict, Union
 from utils.api import source_api
 from utils.pagination import fetch_all
-from utils.logging import logger
+from utils.logger import logger
 from utils.fs import save_json
 
 def export_pages(course_id: int, output_dir: Union[Path, str] = Path("export/data")) -> List[Dict]:
