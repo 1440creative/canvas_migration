@@ -14,3 +14,7 @@ venv/
 # Ignore exported course data
 export/data/
 export/test_data/
+
+# zip course for share with GPT
+*.zip
+
