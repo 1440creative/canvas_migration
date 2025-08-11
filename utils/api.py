@@ -1,80 +1,122 @@
+# utils/api.py
+from __future__ import annotations
+
 import os
 import time
-import requests
-from urllib.parse import urljoin
-from dotenv import load_dotenv
 from typing import Dict, Any, Optional, Union, List
+from urllib.parse import urljoin
 
-load_dotenv() #load .env file
+import requests
+from dotenv import load_dotenv
+
+# --- Tunables ---------------------------------------------------------------
+DEFAULT_TIMEOUT = (5, 30)  # (connect, read) seconds
+DEFAULT_PER_PAGE = 100
+USER_AGENT = "CanvasMigrations/1.0 (+https://example.org)"  # customize
+API_PREFIX = "/api/v1"
+
 
 class CanvasAPI:
-    def __init__(self, base_url: str, token: str) -> None:
-        self.base_url = base_url if base_url.endswith('/') else base_url + '/'
+    def __init__(self, base_url: str | None, token: str | None) -> None:
+        if not base_url or not token:
+            raise ValueError("CanvasAPI base_url and token are required (check your .env)")
+
+        base = base_url.rstrip("/")
+        # Ensure exactly one /api/v1 for the API root; keep host root separately if you need it
+        if base.endswith(API_PREFIX):
+            api_root = base
+            host_root = base[: -len(API_PREFIX)]
+        else:
+            api_root = base + API_PREFIX
+            host_root = base
+
+        self.base_url = host_root + "/"   # host root (trailing slash)
+        self.api_root = api_root + "/"    # canonical API root (trailing slash)
+
         self.session = requests.Session()
         self.session.headers.update({
-            'Authorization': f'Bearer {token}',
-            'Content-Type': 'application/json'
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
         })
-        
-    def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-        """Get request with pagination support"""
-        # Remove leading slashes from endpoint to avoid urljoin dropping base path
-        clean_endpoint = endpoint.lstrip("/")
-        url = urljoin(self.base_url, clean_endpoint)
-        #url = urljoin(self.base_url, endpoint.lstrip('/'))
+
+    # Accept endpoints with or without /api/v1 and build a full API URL
+    def _full_url(self, endpoint: str) -> str:
+        ep = (endpoint or "").strip()
+        if ep.startswith(API_PREFIX):
+            ep = ep[len(API_PREFIX):]
+        ep = ep.lstrip("/")
+        return urljoin(self.api_root, ep)
+
+    # Basic retry/backoff for 429/5xx + timeouts
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        max_attempts = 4
+        delay = 1.0
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = self.session.request(method, url, timeout=DEFAULT_TIMEOUT, **kwargs)
+                if resp.status_code == 429:
+                    retry_after = float(resp.headers.get("Retry-After", delay))
+                    time.sleep(retry_after)
+                    continue
+                resp.raise_for_status()
+                return resp
+            except requests.HTTPError as e:
+                status = getattr(e.response, "status_code", None)
+                if status and status >= 500 and attempt < max_attempts:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise
+            except (requests.ConnectionError, requests.Timeout):
+                if attempt < max_attempts:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise
+
+    def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None
+            ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        """
+        GET with transparent pagination.
+        - If the endpoint returns a list, we return a combined list across pages.
+        - If it returns a single object, we return that dict.
+        """
+        url = self._full_url(endpoint)
+
+        params = dict(params or {})
+        params.setdefault("per_page", DEFAULT_PER_PAGE)
+
         results: List[Dict[str, Any]] = []
         while url:
-            r = self.session.get(url, params=params)
-            r.raise_for_status()
+            r = self._request("GET", url, params=params if results == [] else None)
             data = r.json()
+
             if isinstance(data, list):
                 results.extend(data)
             else:
-                return data #single obj, no pagination
-            # look for pagination link header
-            url = None
-            if 'link' in r.headers:
-                for link in r.headers['link'].split(','):
+                return data  # single object; no pagination
+
+            # Look for RFC 5988 Link header "rel=next"
+            next_url: Optional[str] = None
+            link_hdr = r.headers.get("Link") or r.headers.get("link")
+            if link_hdr:
+                for link in link_hdr.split(","):
                     if 'rel="next"' in link:
-                        url = link[link.find('<')+1:link.find('>')]
+                        next_url = link[link.find("<") + 1: link.find(">")]
                         break
+            url = next_url
+
         return results
-    
-    def post(
-        self, 
-        endpoint: str,
-        payload: Optional[Dict[str, Any]] = None, 
-        files: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        url = urljoin(self.base_url, endpoint.lstrip('/'))
-        r = self.session.post(url, json=payload, files=files)
-        r.raise_for_status()
-        return r.json()
-    
-    def put(
-        self, 
-        endpoint: str,
-        payload: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        url = urljoin(self.base_url, endpoint.lstrip('/'))
-        r = self.session.put(url, json=payload)
-        r.raise_for_status()
-        return r.json()
-    
-    def delete(self, endpoint: str) -> Optional[Dict[str, Any]]:
-        url = urljoin(self.base_url, endpoint.lstrip('/'))
-        r = self.session.delete(url)
-        r.raise_for_status()
-        return r.json() if r.text else None
-    
-# instatiate two API clients (on-premise, cloud)
+
+
+# Instantiate two API clients (source/on-prem and target/cloud)
+load_dotenv()  # read .env once
 source_api = CanvasAPI(
     os.getenv("CANVAS_SOURCE_URL"),
-    os.getenv("CANVAS_SOURCE_TOKEN")
+    os.getenv("CANVAS_SOURCE_TOKEN"),
 )
-
 target_api = CanvasAPI(
     os.getenv("CANVAS_TARGET_URL"),
-    os.getenv("CANVAS_TARGET_TOKEN")
+    os.getenv("CANVAS_TARGET_TOKEN"),
 )
-                
