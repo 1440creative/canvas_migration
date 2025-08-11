@@ -1,45 +1,91 @@
-import json, logging
+# export/export_assignments.py
+from __future__ import annotations
+
 from pathlib import Path
-from typing import List, Dict, Any
-from utils.pagination import fetch_all
-from utils.logger import logger
-from export.combine_metadata import combine_metadata
+from typing import Any, Dict, List
 
-def export_assignments(course_id: int, output_dir: Path = Path("export/data")) -> List[Dict[str, Any]]:
-    logger.info(f"Exporting assignments for course {course_id} to {output_dir}")
+from logging_setup import get_logger
+from utils.api import CanvasAPI
+from utils.fs import ensure_dir, atomic_write, json_dumps_stable, safe_relpath
+from utils.strings import sanitize_slug
 
-    course_dir = output_dir / str(course_id) / "assignments"
-    course_dir.mkdir(parents=True, exist_ok=True)
-    
-    assignments = fetch_all(f"/courses/{course_id}/assignments")
 
-    metadata = []
+def export_assignments(course_id: int, export_root: Path, api: CanvasAPI) -> List[Dict[str, Any]]:
+    """
+    Export Canvas assignments with deterministic structure.
 
-    for a in assignments:
-        slug = f"assignment_{a['id']}"
-        body = a.get("description", "")
+    Layout:
+      export/data/{course_id}/assignments/{position:03d}_{slug}/index.html
+                                                        └─ assignment_metadata.json
 
-        # Save HTML description
-        file_path = course_dir / f"{slug}.html"
-        with file_path.open("w", encoding="utf-8") as f:
-            f.write(body or "")
+    Notes:
+      - Uses CanvasAPI with normalized API root (endpoints omit /api/v1)
+      - Returns list of metadata dicts (compatible with AssignmentMeta fields)
+      - `module_item_ids` stays empty here; modules pass backfills it
+    """
+    log = get_logger(artifact="assignments", course_id=course_id)
 
-        metadata.append({
-            "id": a["id"],
-            "name": a["name"],
-            "points_possible": a.get("points_possible"),
-            "due_at": a.get("due_at"),
-            "published": a.get("published"),
-            "html_file": f"{slug}.html"
-        })
+    course_root = export_root / str(course_id)
+    assigns_root = course_root / "assignments"
+    ensure_dir(assigns_root)
 
-    meta_file = output_dir / str(course_id) / "assignments_metadata.json"
-    with meta_file.open("w", encoding="utf-8") as f:
-        json.dump(metadata, f, indent=2)
+    # 1) Fetch list (pagination handled by CanvasAPI)
+    log.info("fetching assignments list", extra={"endpoint": f"courses/{course_id}/assignments"})
+    items = api.get(f"courses/{course_id}/assignments", params={"per_page": 100})
+    if not isinstance(items, list):
+        raise TypeError("Expected list of assignments from Canvas API")
 
-    logger.info(f"Exported {len(metadata)} assignments for course {course_id}")
+    # 2) Deterministic sort: position (fallback big), then name, then id
+    def sort_key(a: Dict[str, Any]):
+        pos = a.get("position") if a.get("position") is not None else 999_999
+        name = (a.get("name") or "").strip()
+        aid = a.get("id") or 0
+        return (pos, name, aid)
 
-    # Update combined metadata JSON
-    combine_metadata(course_id, output_dir=output_dir)
+    items_sorted = sorted(items, key=sort_key)
 
-    return metadata
+    exported: List[Dict[str, Any]] = []
+
+    # 3) Export each assignment
+    for i, a in enumerate(items_sorted, start=1):
+        aid = int(a["id"])
+        # Detail call: (Canvas returns same shape as list, but do it for parity/futureproofing)
+        detail = api.get(f"courses/{course_id}/assignments/{aid}")
+        if not isinstance(detail, dict):
+            raise TypeError("Expected assignment detail dict from Canvas API")
+
+        name = (detail.get("name") or "").strip() or f"assignment-{aid}"
+        slug = sanitize_slug(name) or f"assignment-{aid}"
+
+        a_dir = assigns_root / f"{i:03d}_{slug}"
+        ensure_dir(a_dir)
+
+        # Write an HTML representation (Canvas uses 'description' for assignment body)
+        html = detail.get("description") or ""
+        html_path = a_dir / "index.html"
+        atomic_write(html_path, html)
+
+        # Build metadata (align with AssignmentMeta fields)
+        meta: Dict[str, Any] = {
+            "id": aid,
+            "name": detail.get("name"),
+            "position": i,
+            "published": bool(detail.get("published", True)),
+            "due_at": detail.get("due_at"),  # ISO8601 or None
+            "points_possible": detail.get("points_possible"),
+            "html_path": safe_relpath(html_path, course_root),
+            "updated_at": detail.get("updated_at") or "",
+            "module_item_ids": [],  # backfilled by modules exporter
+            "source_api_url": api.api_root.rstrip("/") + f"/courses/{course_id}/assignments/{aid}",
+        }
+
+        atomic_write(a_dir / "assignment_metadata.json", json_dumps_stable(meta))
+        exported.append(meta)
+
+        log.info(
+            "exported assignment",
+            extra={"assignment_id": aid, "slug": slug, "position": i, "html": meta["html_path"]},
+        )
+
+    log.info("exported assignments complete", extra={"count": len(exported)})
+    return exported
