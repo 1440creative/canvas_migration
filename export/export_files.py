@@ -127,7 +127,7 @@ def export_files(course_id: int, export_root: Path, api: CanvasAPI) -> List[Dict
 
         log.info(
             "exported file",
-            extra={"file_id": fid, "folder": "/".join(segs), "filename": filename, "path": rel_file_path},
+            extra={"file_id": fid, "folder": "/".join(segs), "file_name": filename, "path": rel_file_path},
         )
 
     log.info("exported files complete", extra={"count": len(exported)})

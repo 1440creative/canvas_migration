@@ -50,17 +50,23 @@ def setup_logging(verbosity: int = 1) -> None:
     })
 
 
+# logging_setup.py
 class _Adapter(logging.LoggerAdapter):
-    """LoggerAdapter that ensures course_id and artifact keys exist."""
+    """LoggerAdapter that ensures course_id and artifact keys exist, and avoids LogRecord collisions."""
 
-    def process(self, msg: str, kwargs: Mapping[str, Any]):  # type: ignore[override]
+    _RESERVED = {
+        "name","msg","args","levelname","levelno","pathname","filename","module","lineno","funcName",
+        "created","asctime","msecs","relativeCreated","thread","threadName","processName","process",
+        "exc_info","exc_text","stack_info","stacklevel"
+    }
+
+    def process(self, msg: str, kwargs):
         extra = dict(self.extra)
-        # allow callers to pass extra too; we merge and prefer adapter defaults
         user_extra = kwargs.get("extra") or {}
         for k, v in user_extra.items():
-            # don’t clobber required keys if adapter already set them
-            if k not in extra:
-                extra[k] = v
+            key = k if k not in self._RESERVED else f"meta_{k}"
+            if key not in extra:  # don't clobber adapter defaults
+                extra[key] = v
         kwargs["extra"] = extra
         return msg, kwargs
 
