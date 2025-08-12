@@ -1,34 +1,54 @@
-# tests/test_export_blueprint_settings.py
-
+from __future__ import annotations
 import json
+from pathlib import Path
+import requests_mock
+
+from utils.api import CanvasAPI
 from export.export_blueprint_settings import export_blueprint_settings
-from utils.api import source_api # needed to patch base_url
 
+def test_export_blueprint_settings(tmp_path: Path):
+    course_id = 888
+    root = tmp_path / "export" / "data"
+    api = CanvasAPI("https://canvas.test", "tkn")
 
-def test_export_blueprint_settings(tmp_path, requests_mock):
-    course_id = 606
-    
-    # Patch the base_url used by source_api to match the mocked URL
-    source_api.base_url = "https://canvas.sfu.ca/api/v1/"
+    with requests_mock.Mocker() as m:
+        # settings say it's blueprint
+        m.get(f"https://canvas.test/api/v1/courses/{course_id}/settings",
+              json={"blueprint": True})
 
-    # Construct the URL that will be called in the function
-    blueprint_url = f"https://canvas.sfu.ca/api/v1/courses/{course_id}/blueprint_templates/default"
-    
-    mock_data = {
-        "id": 123,
-        "course_id": course_id,
-        "template_name": "Default Blueprint",
-        "template_points": True,
-        "locked": False
-    }
+        # list templates (with default)
+        m.get(f"https://canvas.test/api/v1/courses/{course_id}/blueprint_templates",
+              json=[{"id": 9, "name": "Default", "default": True}])
 
-    requests_mock.get(blueprint_url, json=mock_data)
+        # template detail
+        m.get(f"https://canvas.test/api/v1/courses/{course_id}/blueprint_templates/9",
+              json={"id": 9, "name": "Default", "default": True})
 
-    export_blueprint_settings(course_id, output_dir=tmp_path)
+        # restrictions (optional)
+        m.get(f"https://canvas.test/api/v1/courses/{course_id}/blueprint_templates/9/restrictions",
+              json={"content": {"quizzes": True, "pages": True}})
 
-    saved_path = tmp_path / str(course_id) / "blueprint_settings.json"
-    assert saved_path.exists()
+        # associated courses (optional)
+        m.get(f"https://canvas.test/api/v1/courses/{course_id}/blueprint_templates/9/associated_courses",
+              json=[{"id": 1}, {"id": 2}])
 
-    with saved_path.open() as f:
-        data = json.load(f)
-        assert data == mock_data
+        meta = export_blueprint_settings(course_id, root, api)
+
+    bp = json.loads((root / str(course_id) / "blueprint" / "blueprint_metadata.json").read_text("utf-8"))
+    assert meta["template"]["id"] == 9
+    assert bp["is_blueprint"] is True
+    assert bp["template"]["default"] is True
+    assert bp["associated_courses"] == [1, 2]
+
+def test_non_blueprint_skips(tmp_path: Path):
+    course_id = 889
+    root = tmp_path / "export" / "data"
+    api = CanvasAPI("https://canvas.test", "tkn")
+
+    with requests_mock.Mocker() as m:
+        m.get(f"https://canvas.test/api/v1/courses/{course_id}/settings", json={"blueprint": False})
+        meta = export_blueprint_settings(course_id, root, api)
+
+    # no blueprint dir written
+    assert meta == {}
+    assert not (root / str(course_id) / "blueprint").exists()

@@ -1,30 +1,28 @@
+from __future__ import annotations
 import json
-from export.export_settings import export_settings
+from pathlib import Path
+import requests_mock
 
-def test_export_settings(tmp_path, requests_mock):
-    course_id = 606
-    
-    # Patch the API base URL to match the mocked URL
-    from utils import api
-    api.source_api.base_url = "https://canvas.test/api/v1/"
+from utils.api import CanvasAPI
+from export.export_settings import export_course_settings
 
-    fake_settings = {
-        "allow_student_forum_attachments": True,
-        "hide_final_grades": True,
-        "default_view": "modules"
-    }
+def test_export_course_settings(tmp_path: Path):
+    course_id = 777
+    root = tmp_path / "export" / "data"
+    api = CanvasAPI("https://canvas.test", "tkn")
 
-    requests_mock.get(
-        f"https://canvas.test/api/v1/courses/{course_id}/settings",
-        json=fake_settings
-    )
+    with requests_mock.Mocker() as m:
+        m.get(f"https://canvas.test/api/v1/courses/{course_id}",
+              json={"id": course_id, "uuid": "abc", "name": "Demo", "course_code": "DEMO",
+                    "enrollment_term_id": 55, "account_id": 1, "workflow_state": "available",
+                    "start_at": None, "end_at": None, "blueprint": False})
+        m.get(f"https://canvas.test/api/v1/courses/{course_id}/settings",
+              json={"allow_student_forum_attachments": True, "blueprint": False})
 
-    export_settings(course_id, tmp_path)
+        info = export_course_settings(course_id, root, api)
 
-    settings_file = tmp_path / str(course_id) / "course_settings.json"
-    assert settings_file.exists()
-
-    with settings_file.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    assert data == fake_settings
+    assert info["is_blueprint"] is False
+    md = json.loads((root / str(course_id) / "course" / "course_metadata.json").read_text("utf-8"))
+    st = json.loads((root / str(course_id) / "course" / "course_settings.json").read_text("utf-8"))
+    assert md["id"] == course_id
+    assert st["allow_student_forum_attachments"] is True
