@@ -18,3 +18,7 @@ export/test_data/
 # zip course for share with GPT
 *.zip
 
+
+# Temp / backup files
+*.bak
+tmp_test_root/
