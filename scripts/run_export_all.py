@@ -30,10 +30,10 @@ def export_course_all(course_id: int, export_root: Path, include_questions: bool
 
     # 3) Modules (backfill across all artifacts)
     export_modules(course_id, export_root, source_api)
+    
+    # Always attempt blueprint; function will skip if not applicable
+    export_blueprint_settings(course_id, export_root, source_api)
 
-    # 4) Blueprint (if applicable)
-    if info.get("is_blueprint"):
-        export_blueprint_settings(course_id, export_root, source_api)
 
 
 def main() -> None:
