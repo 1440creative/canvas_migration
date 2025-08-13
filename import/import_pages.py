@@ -96,7 +96,8 @@ def import_pages(
         old_url = metadata.get("url") or metadata.get("slug")
 
         # Resolve HTML body file
-        html_filename = metadata.get("html_file") or "index.html"
+        html_filename = metadata.get("html_path") or metadata.get("html_file") or "index.html"
+
         html_path = meta_file.parent / html_filename
         if not html_path.exists():
             # Fallbacks in case exporter wrote different names

@@ -140,7 +140,8 @@ def import_assignments(
 
         old_id = _coerce_int(meta.get("id"))
         # Resolve HTML description file (optional)
-        html_path = meta_file.parent / "description.html"
+        html_path = meta_file.parent / (meta.get("html_path") or "description.html")
+
         body_html = _read_text_if_exists(html_path)
 
         # Canvas requires a name/title; skip if missing
