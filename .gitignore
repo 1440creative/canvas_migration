@@ -24,4 +24,5 @@ export/test_data/
 tmp_test_root/
 docs/gpt_context.md
 docs/working_notes.md
-working_plan-*.md
+docs/working_notes-*.md
+docs/working_plan-*.md
