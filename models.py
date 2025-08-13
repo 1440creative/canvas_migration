@@ -78,3 +78,27 @@ class CourseStructure:
     modules: List[ModuleMeta] = field(default_factory=list)
     assignments: List[AssignmentMeta] = field(default_factory=list)
     files: List[FileMeta] = field(default_factory=list)    
+    
+# models.py (add)
+from typing import Optional, List
+from dataclasses import dataclass
+
+@dataclass(frozen=True, slots=True)
+class QuizMeta:
+    id: int
+    title: str
+    quiz_type: str                  # "assignment", "practice_quiz", "graded_survey", "survey"
+    published: bool
+    points_possible: Optional[float]
+    time_limit: Optional[int]
+    allowed_attempts: Optional[int]
+    shuffle_answers: Optional[bool]
+    scoring_policy: Optional[str]   # "keep_highest", "keep_latest"
+    one_question_at_a_time: Optional[bool]
+    due_at: Optional[str]
+    unlock_at: Optional[str]
+    lock_at: Optional[str]
+    html_path: Optional[str]        # exported relative path to description HTML
+    updated_at: str
+    module_item_ids: List[int]
+    source_api_url: str
