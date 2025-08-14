@@ -1,0 +1,10 @@
+Context to paste into a new chat:
+
+- Branch: refactor/import-pipeline
+- Goal: Build the **import** side of Canvas LMS migration. Export is done and deterministic.
+- Implemented importers: files, pages, assignments, quizzes, discussions (+ tests for all except discussions may be pending run). Next up: **modules** rebuild using `module_item_ids` + ID maps.
+- API wrapper: `utils/api.CanvasAPI` with get/post/put/delete/post_json + `begin_course_file_upload()`; session defaults to JSON.
+- Logging: call `setup_logging()` in CLI; use `get_logger(course_id=?, artifact=?)` inside importers; don’t pass verbosity to `get_logger`.
+- ID maps (combined): `files`, `pages`, `pages_url`, `assignments`, `quizzes`, `discussions`, `modules`.
+- Export layout assumed by importers: `export/data/{source_course_id}/` with subdirs for files/pages/assignments/quizzes/discussions/modules.
+- Immediate task when resuming: finish `import/import_modules.py` and run `tests/test_import_modules.py`; then implement HTML link rewriting and the unified `run_import_all.py` runner.

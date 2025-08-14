@@ -6,7 +6,7 @@ import requests
 
 
 def _load_quizzes_module(project_root: Path):
-    mod_path = (project_root / "import" / "import_quizzes.py").resolve()
+    mod_path = (project_root /"importers"/ "import_quizzes.py").resolve()
     assert mod_path.exists(), f"Expected module at {mod_path}"
     spec = importlib.util.spec_from_file_location("import_quizzes_mod", str(mod_path))
     mod = importlib.util.module_from_spec(spec)
