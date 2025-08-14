@@ -7,7 +7,7 @@ import requests
 
 # ---- Loader (load import/import_pages.py by path since "import" is a keyword dir)
 def _load_pages_module(project_root: Path):
-    mod_path = (project_root / "import" / "import_pages.py").resolve()
+    mod_path = (project_root /"importers"/ "import_pages.py").resolve()
     assert mod_path.exists(), f"Expected module at {mod_path}"
     spec = importlib.util.spec_from_file_location("import_pages_mod", str(mod_path))
     mod = importlib.util.module_from_spec(spec)

@@ -8,7 +8,7 @@ import requests
 
 
 def load_importer(project_root: Path):
-    mod_path = (project_root / "import" / "import_files.py").resolve()
+    mod_path = (project_root /"importers"/ "import_files.py").resolve()
     assert mod_path.exists(), f"Expected module at {mod_path}, but it does not exist."
 
     spec = importlib.util.spec_from_file_location("import_files_mod", str(mod_path))
