@@ -1,5 +1,6 @@
-#tests/test_export_modules_pagination.py
+# tests/test_export_modules_pagination.py
 from export.export_modules import export_modules
+from utils import api
 
 def test_export_modules_pagination(tmp_output, requests_mock):
     course_id = 303
@@ -36,13 +37,13 @@ def test_export_modules_pagination(tmp_output, requests_mock):
         json=[{"id": 22, "title": "Discussion B", "type": "Discussion", "position": 2, "content_id": 301}]
     )
 
-    # Patch base_url for API
-    from utils import api
+    # Use the shared source_api object and point it at the mocked host
     api.source_api.base_url = f"{base_url}/"
 
-    metadata = export_modules(course_id, output_dir=str(tmp_output))
+    # New calling convention: export_root path + explicit api
+    export_root = tmp_output / "export" / "data"
+    metadata = export_modules(course_id, export_root, api.source_api)
 
-    # Assertions
     assert len(metadata) == 2
     assert metadata[0]["name"] == "Module 1"
     assert len(metadata[0]["items"]) == 1
