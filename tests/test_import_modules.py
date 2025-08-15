@@ -20,7 +20,8 @@ class DummyCanvasAPI:
         self.calls: List[Dict[str, Any]] = []
         self._next_id = 1000
 
-    def post_json(self, url: str, json: Dict[str, Any]) -> Dict[str, Any]:
+    def post_json(self, url: str, **kwargs) -> Dict[str, Any]:
+        json = kwargs.get('payload', kwargs.get('json'))
         self.calls.append({"url": url, "json": json})
         # Modules endpoint returns a new module id.
         if url.endswith("/modules"):

@@ -180,7 +180,7 @@ def import_modules(
         payload = _module_payload(m)
         logger.debug("Creating module %s (old_id=%s) with payload=%s", m.get("name"), old_module_id, payload)
 
-        resp = canvas.post_json(f"/courses/{target_course_id}/modules", json=payload)
+        resp = canvas.post_json(f"/courses/{target_course_id}/modules", payload=payload)
         new_module_id = resp.get("id")
         if new_module_id is None:
             logger.warning("Canvas did not return a module id for old_id=%s; response=%s", old_module_id, resp)
