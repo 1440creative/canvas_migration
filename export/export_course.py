@@ -1,41 +1,44 @@
+# export/export_course.py
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+from utils.api import CanvasAPI, source_api
 from export.export_pages import export_pages
 from export.export_modules import export_modules
 from export.export_assignments import export_assignments
 from export.export_quizzes import export_quizzes
 from export.export_discussions import export_discussions
 from export.export_files import export_files
-from export.export_settings import export_settings
+from export.export_settings import export_course_settings
 from export.export_blueprint_settings import export_blueprint_settings
-from pathlib import Path
 
-def export_course(course_id: int, output_dir: str) -> None:
-    """Export all course content and settings from Canvas
-       Args:
-        course_id (int): Canvas course ID
-        output_dir (str): Directory to write exported content into
+def export_course(course_id: int, export_root: Path, api: Optional[CanvasAPI] = None) -> None:
     """
-    output_path = Path(output_dir) / str(course_id)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    print(f"Exporting course {course_id} to {output_path}")
-    
-    export_pages(course_id, output_path)
-    export_modules(course_id, output_path)
-    export_assignments(course_id, output_path)
-    export_quizzes(course_id, output_path)
-    export_discussions(course_id, output_path)
-    export_files(course_id, output_path)
-    export_settings(course_id, output_path)
-    export_blueprint_settings(course_id, output_path)
-    
-    print(f"Export complete: {output_path}")
+    Export all course artifacts into export_root/{course_id}/...
+    """
+    api = api or source_api
+    course_root = export_root / str(course_id)
+    course_root.mkdir(parents=True, exist_ok=True)
+
+    print(f"Exporting course {course_id} to {course_root}")
+
+    export_pages(course_id, export_root, api)
+    export_modules(course_id, export_root, api)
+    export_assignments(course_id, export_root, api)
+    export_quizzes(course_id, export_root, api)
+    export_discussions(course_id, export_root, api)
+    export_files(course_id, export_root, api)
+    export_course_settings(course_id, export_root, api)
+    export_blueprint_settings(course_id, export_root, api)
+
+    print(f"Export complete: {course_root}")
 
 if __name__ == "__main__":
     import argparse
-
     parser = argparse.ArgumentParser(description="Export a Canvas course")
     parser.add_argument("course_id", type=int, help="Canvas course ID")
-    parser.add_argument("output_dir", help="Directory to save course export")
-
+    parser.add_argument("export_root", type=Path, help="Directory to save course export")
     args = parser.parse_args()
-    export_course(args.course_id, args.output_dir)
+    export_course(args.course_id, args.export_root)

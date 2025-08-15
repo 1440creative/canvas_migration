@@ -116,9 +116,9 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
     assignments_updated = _backfill_by_id(
         course_root, "assignments", "assignment_metadata.json", "id", assignment_backrefs
     )
-    files_updated = _backfill_by_id(
-        course_root, "files", "file_metadata.json", "id", file_backrefs
-    )
+    #Files use sidecars like: files/.../filename.ext.metadata.json
+    files_updated = _backfill_file_sidecars_by_id(course_root, file_backrefs)
+
     quizzes_updated = _backfill_by_id(
         course_root, "quizzes", "quiz_metadata.json", "id", quiz_backrefs
     )
@@ -204,5 +204,33 @@ def _backfill_by_id(
             continue
         ids = id_to_ids.get(obj_id)
         if ids and _backfill_json_list(meta_path, ids):
+            updated += 1
+    return updated
+
+def _backfill_file_sidecars_by_id(
+    course_root: Path,
+    id_to_ids: Dict[int, List[int]],
+) -> int:
+    """
+    Match Canvas File ids to *.metadata.json sidecars and merge module_item_ids.
+    """
+    root = course_root / "files"
+    if not root.exists():
+        return 0
+
+    updated = 0
+    for sidecar in sorted(root.glob("**/*.metadata.json")):
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        fid = data.get("id")
+        if not isinstance(fid, int):
+            continue
+        ids = id_to_ids.get(fid)
+        if not ids:
+            continue
+        before = data.get("module_item_ids", [])
+        after = _merge_ids(before, ids)
+        if after != before:
+            data["module_item_ids"] = after
+            atomic_write(sidecar, json_dumps_stable(data))
             updated += 1
     return updated
