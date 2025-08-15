@@ -5,17 +5,26 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from logging_setup import get_logger
-from utils.api import CanvasAPI
+from utils.api import CanvasAPI, source_api
 from utils.fs import ensure_dir, atomic_write, json_dumps_stable, safe_relpath
 from utils.strings import sanitize_slug
 
 
 def export_quizzes(
     course_id: int,
-    export_root: Path,
-    api: CanvasAPI,
+    export_root: Optional[Path] = None,
+    api: Optional[CanvasAPI] = None,
     include_questions: bool = False,
+    output_dir: Optional[Path] = None,  # legacy alias
 ) -> List[Dict[str, Any]]:
+    # Back-compat: allow output_dir alias and default API
+    if export_root is None and output_dir is not None:
+        export_root = output_dir
+    if export_root is None:
+        raise ValueError("export_root (or legacy output_dir) is required")
+
+    if api is None:
+        api = source_api
     """
     Export Canvas quizzes with deterministic structure.
 
@@ -28,6 +37,7 @@ def export_quizzes(
       - Returns list of metadata dicts (compatible with a QuizMeta structure)
       - `module_item_ids` stays empty here; modules pass backfills it
     """
+    
     log = get_logger(artifact="quizzes", course_id=course_id)
 
     course_root = export_root / str(course_id)
@@ -84,24 +94,35 @@ def export_quizzes(
                 atomic_write(q_dir / "questions.json", json_dumps_stable(questions_sorted))
                 question_count = len(questions_sorted)
 
-        # Metadata
+        quiz_type_raw = detail.get("quiz_type")
+        quiz_type = "assignment" if quiz_type_raw == "graded_quiz" else quiz_type_raw
+        
+        # Metadata (aligned with QuizMeta)
         meta: Dict[str, Any] = {
             "id": qid,
             "title": title,
             "position": i,
             "published": bool(detail.get("published", True)),
-            "quiz_type": detail.get("quiz_type"),          # practice_quiz, graded_quiz, etc.
-            "time_limit": detail.get("time_limit"),        # minutes or None
-            "shuffle_answers": detail.get("shuffle_answers"),
+            "quiz_type": quiz_type,                            # practice_quiz | assignment | graded_survey | survey
+            "points_possible": detail.get("points_possible"),
+            "time_limit": detail.get("time_limit"),            # minutes or None
             "allowed_attempts": detail.get("allowed_attempts"),
-            "hide_results": detail.get("hide_results"),
+            "shuffle_answers": detail.get("shuffle_answers"),
+            "scoring_policy": detail.get("scoring_policy"),
+            "one_question_at_a_time": detail.get("one_question_at_a_time"),
             "due_at": detail.get("due_at"),
-            "html_path": safe_relpath(html_path, course_root),
+            "unlock_at": detail.get("unlock_at"),
+            "lock_at": detail.get("lock_at"),
+            "html_path": safe_relpath(html_path, course_root), # importer prefers meta['html_path']
             "updated_at": detail.get("updated_at") or "",
             "question_count": question_count,
             "module_item_ids": [],  # backfilled by modules exporter
             "source_api_url": api.api_root.rstrip("/") + f"/courses/{course_id}/quizzes/{qid}",
         }
+        #keep extra Canvas fields
+        if "hide_results" in detail:
+            meta["hide_results"] = detail["hide_results"]
+
 
         atomic_write(q_dir / "quiz_metadata.json", json_dumps_stable(meta))
         exported.append(meta)

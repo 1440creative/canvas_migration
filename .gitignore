@@ -22,3 +22,12 @@ export/test_data/
 # Temp / backup files
 *.bak
 tmp_test_root/
+docs/gpt_context.md
+docs/working_notes.md
+docs/working_notes-*.md
+docs/working_plan-*.md
+docs/gpt_chat/
+
+# ChatGPT scratch
+project-structure-*.txt
+docs/_gpt_chat/IMPORT_HANDOFF-*.md
