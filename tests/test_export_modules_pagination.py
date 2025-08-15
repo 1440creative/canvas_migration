@@ -37,7 +37,7 @@ def test_export_modules_pagination(tmp_output, requests_mock):
         json=[{"id": 22, "title": "Discussion B", "type": "Discussion", "position": 2, "content_id": 301}]
     )
 
-    # Use the shared source_api object and point it at the mocked host
+    # Point the shared source_api to the mocked host
     api.source_api.base_url = f"{base_url}/"
 
     # New calling convention: export_root path + explicit api
