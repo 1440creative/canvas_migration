@@ -29,6 +29,5 @@ docs/working_*.md
 docs/_gpt_chat/*
 docs/structure/*
 
-
-# Ignore ChatGPT transcripts
-/docs/_gpt_chat/
+#local test export
+sandbox_export/
