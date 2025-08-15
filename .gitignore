@@ -26,5 +26,8 @@ tmp_test_root/
 #notes and chat
 docs/gpt_context.md
 docs/working_*.md
-docs/_gpt_chat/
-docs/structure/
+docs/_gpt_chat/*
+docs/structure/*
+
+#local test export
+sandbox_export/
