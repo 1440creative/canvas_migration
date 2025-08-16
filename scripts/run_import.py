@@ -13,6 +13,13 @@ import json
 from pathlib import Path
 from typing import Dict, Any
 
+# ensure repo root is importable
+from pathlib import Path
+import sys
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "course"]
 

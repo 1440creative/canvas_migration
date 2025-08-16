@@ -1,4 +1,4 @@
-# import/import_pages.py
+# importers/import_pages.py
 """
 Import Pages into a Canvas course using your CanvasAPI-style wrapper.
 
@@ -19,12 +19,34 @@ This importer:
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, Protocol
 
 from logging_setup import get_logger
 import requests
+
+
+def _resolve_html_file(page_dir: Path, meta: dict, course_root: Path) -> Path | None:
+    # 1) Prefer metadata html_path if it points to a real file (relative to course_root)
+    html_rel = (meta or {}).get("html_path")
+    if html_rel:
+        p = (course_root / html_rel)
+        if p.exists():
+            return p
+
+    # 2) Look for common filenames inside this page directory
+    for name in ("index.html", "body.html", "description.html", "page.html"):
+        p = page_dir / name
+        if p.exists():
+            return p
+
+    # 3) Last resort: if there’s exactly one *.htm(l) file, use it
+    htmls = list(page_dir.glob("*.htm*"))
+    if len(htmls) == 1:
+        return htmls[0]
+
+    return None
+
 
 __all__ = ["import_pages"]
 
@@ -83,7 +105,11 @@ def import_pages(
     skipped = 0
     failed = 0
 
+    course_root = export_root if isinstance(export_root, Path) else Path(export_root)
+
     for meta_file in pages_dir.rglob("page_metadata.json"):
+        page_dir = meta_file.parent
+
         try:
             metadata = json.loads(_read_text(meta_file))
         except Exception as e:
@@ -95,37 +121,34 @@ def import_pages(
         title = metadata.get("title") or metadata.get("page_title")
         old_url = metadata.get("url") or metadata.get("slug")
 
-        # Resolve HTML body file
-        html_filename = metadata.get("html_path") or metadata.get("html_file") or "index.html"
-
-        html_path = meta_file.parent / html_filename
-        if not html_path.exists():
-            # Fallbacks in case exporter wrote different names
-            for cand in ("body.html", f"{(title or 'page').strip().replace(' ', '_')}.html"):
-                p = meta_file.parent / cand
-                if p.exists():
-                    html_path = p
-                    break
-            else:
-                skipped += 1
-                logger.warning("Skipping page at %s (missing HTML body file)", meta_file.parent)
-                continue
+        # Resolve HTML body file (new + old export layouts)
+        html_path = _resolve_html_file(page_dir, metadata, course_root)
+        if not html_path:
+            skipped += 1
+            logger.warning("Skipping page at %s (missing HTML body file)", page_dir)
+            continue
 
         if not title:
             skipped += 1
             logger.warning("Skipping %s (missing page title)", meta_file)
             continue
 
-        published = bool(metadata.get("published", False))
+        html = _read_text(html_path)
+        published = bool(metadata.get("published", True))   # default True matches export side
         is_front_page = bool(metadata.get("front_page", False))
 
         try:
-            new_page = _create_page(
-                canvas=canvas,
-                course_id=target_course_id,
-                title=title,
-                body=_read_text(html_path),
-                published=published,
+            # ---- POST create page (Canvas expects 'wiki_page' envelope)
+            payload = {
+                "wiki_page": {
+                    "title": title,
+                    "body": html,
+                    "published": published,
+                }
+            }
+            new_page = canvas.post_json(
+                f"/api/v1/courses/{target_course_id}/pages",
+                payload=payload,
             )
 
             # Canvas returns at least 'url' (slug); sometimes 'page_id'
@@ -137,6 +160,7 @@ def import_pages(
             if old_url and new_url:
                 page_url_map[str(old_url)] = str(new_url)
 
+            # Mark front page if requested
             if is_front_page and new_url:
                 _set_front_page(canvas=canvas, course_id=target_course_id, url=new_url)
 
@@ -145,7 +169,7 @@ def import_pages(
 
         except Exception as e:
             failed += 1
-            logger.exception("Failed to create page from %s: %s", meta_file.parent, e)
+            logger.exception("Failed to create page from %s: %s", page_dir, e)
 
     logger.info(
         "Pages import complete. imported=%d skipped=%d failed=%d total=%d",
@@ -154,30 +178,6 @@ def import_pages(
 
 
 # ---- Canvas ops -------------------------------------------------------------
-def _create_page(
-    *,
-    canvas: CanvasLike,
-    course_id: int,
-    title: str,
-    body: str,
-    published: bool,
-) -> Dict[str, Any]:
-    """
-    Create a page via POST /courses/{course_id}/pages.
-    Canvas expects a 'wiki_page' envelope.
-    """
-    payload = {
-        "wiki_page": {
-            "title": title,
-            "body": body,
-            "published": published,
-        }
-    }
-    resp = canvas.post(f"/api/v1/courses/{course_id}/pages", json=payload)
-    resp.raise_for_status()
-    return resp.json()
-
-
 def _set_front_page(
     *,
     canvas: CanvasLike,
