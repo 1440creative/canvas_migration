@@ -136,6 +136,9 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
             "discussions": discussions_updated,
         },
     )
+    
+    # NEW: write combined modules.json for the importer/dry-run
+    atomic_write(modules_root / "modules.json", json_dumps_stable(exported))
 
     log.info("exported modules complete", extra={"count": len(exported)})
     return exported
