@@ -31,3 +31,6 @@ docs/structure/*
 
 #local test export
 sandbox_export/
+
+#scratch
+id_map.json
