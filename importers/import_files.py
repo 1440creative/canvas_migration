@@ -1,4 +1,4 @@
-# import/import_files.py
+# importers/import_files.py
 """
 Import files into a Canvas course using your CanvasAPI-style wrapper.
 
@@ -12,6 +12,10 @@ Per file:
   4) Record old_id -> new_id in id_map["files"]
 
 This module exposes a single public entrypoint: `import_files`.
+
+Enhancements:
+- Uploads manifest (.uploads_manifest.json) at the course root to skip re-uploading
+  identical files (by sha256) across runs.
 """
 
 from __future__ import annotations
@@ -23,8 +27,34 @@ from typing import Dict, Any, Protocol, Optional
 
 import requests
 from logging_setup import get_logger  # your project-level logger adapter
+from utils.fs import file_hashes
 
 __all__ = ["import_files"]
+
+# ---- Manifest helpers -------------------------------------------------------
+_MANIFEST_NAME = ".uploads_manifest.json"
+
+def _manifest_path(export_root: Path) -> Path:
+    # keep manifest at course root alongside 'files/'
+    return export_root / _MANIFEST_NAME
+
+def _load_manifest(export_root: Path) -> dict:
+    p = _manifest_path(export_root)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+def _save_manifest(export_root: Path, manifest: dict) -> None:
+    p = _manifest_path(export_root)
+    p.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+def _normalize_folder_path(folder_path: str) -> str:
+    # Canvas accepts a path relative to course root; trim slashes and collapse
+    fp = (folder_path or "").strip().strip("/")
+    return fp if fp else "/"
 
 
 # ---- Protocol to decouple from your exact CanvasAPI class -------------------
@@ -65,20 +95,13 @@ def import_files(
     canvas: CanvasLike,
     id_map: Dict[str, Dict[int, int]],
     on_duplicate: str = "overwrite",  # or "rename"
-    verbosity: int = 1, # still available for CLI but not passed to get_logger()
+    verbosity: int = 1,  # still available for CLI but not passed to get_logger()
 ) -> None:
     """
     Upload files from export_root/files into the Canvas course and update id_map["files"].
+    Uses a .uploads_manifest.json at the course root to skip re-uploading identical blobs.
     """
-    # Just bind course_id and artifact — verbosity is handled globally by setup_logging()
     logger = get_logger(course_id=target_course_id, artifact="files")
-
-    files_dir = export_root / "files"
-    if not files_dir.exists():
-        logger.warning("No files directory found at %s", files_dir)
-        return
-
-    logger.info("Starting file import from %s", files_dir)
 
     files_dir = export_root / "files"
     if not files_dir.exists():
@@ -91,6 +114,9 @@ def import_files(
     imported = 0
     skipped = 0
     failed = 0
+
+    # Load uploads manifest once; structure: { "<files/rel/path>": { "sha256": "...", "new_id": 12345 } }
+    manifest: dict = _load_manifest(export_root)
 
     # Find all sidecar metadata files produced by your exporter
     for meta_file in files_dir.rglob("*.metadata.json"):
@@ -123,6 +149,32 @@ def import_files(
             parent_rel = Path(rel_path).parent.as_posix()
             folder_path = parent_rel if parent_rel not in ("", ".") else "/"
 
+        # Normalize folder path consistently for the upload call
+        folder_path = _normalize_folder_path(folder_path)
+
+        # Compute local hash to support skip-by-hash idempotency
+        try:
+            hashes = file_hashes(exported_file)
+            local_sha = hashes["sha256"]
+        except Exception as e:
+            # Hashing failed — proceed without skip, but log
+            local_sha = None
+            logger.debug("Could not compute sha256 for %s: %s", rel_path, e)
+
+        # Manifest key: the exported path relative to files_dir (POSIX)
+        manifest_key = rel_path
+
+        if local_sha:
+            prev = manifest.get(manifest_key)
+            if prev and isinstance(prev, dict) and prev.get("sha256") == local_sha:
+                # Already uploaded this exact blob — record mapping & skip
+                new_id_prev = prev.get("new_id")
+                if old_id is not None and isinstance(new_id_prev, int):
+                    file_map[old_id] = new_id_prev
+                imported += 1  # treat as satisfied to keep totals intuitive
+                logger.info("Skipped upload (same sha256): %s → existing_id=%s", rel_path, new_id_prev)
+                continue
+
         logger.debug(
             "Processing file: rel=%s old_id=%s folder=%s size=%s bytes",
             rel_path, old_id, folder_path, exported_file.stat().st_size
@@ -140,9 +192,20 @@ def import_files(
             file_map[old_id] = int(new_id)
             imported += 1
             logger.info("Uploaded %s → new_id=%s", rel_path, new_id)
+
+            # Update manifest with the new sha and id
+            if local_sha:
+                manifest[manifest_key] = {"sha256": local_sha, "new_id": int(new_id)}
+
         except Exception as e:
             failed += 1
             logger.exception("Failed to upload %s: %s", rel_path, e)
+
+    # Persist manifest at the end (best-effort)
+    try:
+        _save_manifest(export_root, manifest)
+    except Exception as e:
+        logger.warning("Could not save uploads manifest: %s", e)
 
     logger.info(
         "File import complete. imported=%d skipped=%d failed=%d total=%d",

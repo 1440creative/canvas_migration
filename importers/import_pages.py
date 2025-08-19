@@ -25,6 +25,8 @@ from typing import Dict, Any, Optional, Protocol
 from logging_setup import get_logger
 import requests
 
+_WARNED_PAGE_POSITION = False
+
 
 def _resolve_html_file(page_dir: Path, meta: dict, course_root: Path) -> Path | None:
     # 1) Prefer metadata html_path if it points to a real file (relative to course_root)
@@ -116,6 +118,15 @@ def import_pages(
             failed += 1
             logger.exception("Failed to read %s: %s", meta_file, e)
             continue
+        
+        #log once - PageMeta.position is ignored on import. Ordering is from ModuleItemMeta.position.
+        global _WARNED_PAGE_POSITION
+        if not _WARNED_PAGE_POSITION and "position" in metadata:
+            logger.debug(
+                "Ignoring PageMeta.position; Canvas has no global Pages order. "
+                "ModuleItemMeta.position governs ordering within modules."
+            )
+            _WARNED_PAGE_POSITION = True
 
         old_id = _coerce_int(metadata.get("id"))
         title = metadata.get("title") or metadata.get("page_title")
