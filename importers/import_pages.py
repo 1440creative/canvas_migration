@@ -134,7 +134,8 @@ def import_pages(
             )
 
             if is_front_page and new_url:
-                _set_front_page(canvas=canvas, course_id=target_course_id, url=new_url)
+                _set_front_page(canvas=canvas, course_id=target_course_id, url=new_url, logger=logger)
+
 
             imported += 1
             logger.info("Created page '%s' (url=%s, id=%s)", title, new_url, new_page_id)
@@ -149,7 +150,25 @@ def import_pages(
     )
 
 
-def _set_front_page(*, canvas: CanvasLike, course_id: int, url: str) -> None:
+def _set_front_page(
+    *,
+    canvas: CanvasLike,
+    course_id: int,
+    url: str,
+    logger,
+) -> bool:
+    """
+    Mark a page as the course front page:
+    PUT /courses/{course_id}/pages/{url} with {"wiki_page": {"front_page": true}}.
+
+    Returns True if successful, False if failed.
+    """
     payload = {"wiki_page": {"front_page": True}}
-    resp = canvas.put(f"/api/v1/courses/{course_id}/pages/{url}", json=payload)
-    resp.raise_for_status()
+    try:
+        resp = canvas.put(f"/api/v1/courses/{course_id}/pages/{url}", json=payload)
+        resp.raise_for_status()
+        logger.info("Marked page as front page (url=%s)", url)
+        return True
+    except Exception as e:
+        logger.error("Failed to set front page url=%s: %s", url, e)
+        return False
