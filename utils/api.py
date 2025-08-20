@@ -128,6 +128,17 @@ class CanvasAPI:
         """Raw DELETE; returns Response."""
         url = self._full_url(endpoint)
         return self._request("DELETE", url, params=params)
+    
+    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
+        """
+        Perform a multipart/form-data POST (used for Canvas file uploads).
+        Strips the default Content-Type so requests can set it correctly.
+        """
+        headers = self.session.headers.copy()
+        headers.pop("Content-Type", None) # let requests set multipart boundary
+        resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp
 
     def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Dict[str, Any]:
         """

@@ -247,7 +247,13 @@ def _upload_file_via_canvas_api(
     # Use a *plain* requests.post here; upload_url is a different host.
     with open(file_path, "rb") as fh:
         files = {"file": (file_path.name, fh)}
-        up = requests.post(upload_url, data=upload_params, files=files, allow_redirects=False)
+        # up = requests.post(upload_url, data=upload_params, files=files, allow_redirects=False) #Previous code
+        up = canvas._multipart_post(
+        init_json["upload_url"],
+        data=init_json.get("upload_params", {}),
+        files={"file": (file_path.name, open(file_path, "rb"))},
+    )
+
 
     # Step 3: Follow finalization redirect if present (use same auth session)
     if 300 <= up.status_code < 400 and "Location" in up.headers:

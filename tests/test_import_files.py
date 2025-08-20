@@ -59,6 +59,16 @@ class DummyCanvas:
             ep = ep[len("/api/v1"):]
         ep = ep.lstrip("/")
         return self.api_root + "api/v1/" + ep
+    
+    def _multipart_post(self, url: str, *, data: dict, files: dict):
+        """
+        Multipart POST passthrough for testing.
+        Delegates to requests.Session so requests_mock can intercept.
+        """
+        headers = self.session.headers.copy()
+        headers.pop("Content-Type", None)  # mimic real CanvasAPI behavior
+        return self.session.post(url, data=data, files=files, headers=headers)
+
 
 
 def test_import_files_upload_flow(tmp_path, requests_mock):
