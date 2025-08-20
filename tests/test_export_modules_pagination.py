@@ -25,11 +25,11 @@ def test_export_modules_pagination(tmp_output, requests_mock):
         json=[{"id": 11, "title": "Intro Page", "type": "Page", "position": 1, "page_url": "intro"}]
     )
 
-    # Module 2 items (simulate pagination here too)
+    # Module 2 items (simulate pagination here too) — unquoted rel=next
     requests_mock.get(
         f"{base_api}/courses/{course_id}/modules/2/items",
         json=[{"id": 21, "title": "Assignment A", "type": "Assignment", "position": 1, "content_id": 201}],
-        headers={"Link": f'<{base_api}/courses/{course_id}/modules/2/items?page=2>; rel="next"'}
+        headers={"Link": f'<{base_api}/courses/{course_id}/modules/2/items?page=2>; rel=next'}
     )
 
     requests_mock.get(
