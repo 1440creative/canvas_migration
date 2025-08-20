@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from importers import import_pages
-from tests.test_import_pages import DummyCanvas  # reuse your helper
+from tests.test_import_pages import DummyCanvas
 
 
 def test_front_page_put_failure_increments_failed(tmp_path, requests_mock, caplog):
