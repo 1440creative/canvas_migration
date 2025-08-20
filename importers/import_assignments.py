@@ -20,11 +20,13 @@ Notes:
 from __future__ import annotations
 
 import json
+import requests
 from pathlib import Path
 from typing import Dict, Any, Optional, Protocol
 
-import requests
+
 from logging_setup import get_logger
+from utils.mapping import record_mapping
 
 __all__ = ["import_assignments"]
 
@@ -57,7 +59,7 @@ def _coerce_int(val: Any) -> Optional[int]:
 # Anything not listed here is ignored for safety, but you can extend as needed.
 _ALLOWED_FIELDS = {
     # Identity / core
-    "name", "title", "position", "published",
+    "name", "position", "published",
 
     # Points & grading
     "points_possible", "grading_type", "grading_standard_id",
@@ -76,7 +78,7 @@ _ALLOWED_FIELDS = {
     "external_tool_tag_attributes",  # for LTI: { url, new_tab, resource_link_id, ... }
 
     # Misc
-    "assignment_group_id", "description", "rubric_settings",
+    "description", "rubric_settings",
     "freeze_on_copy",
 }
 
@@ -158,8 +160,16 @@ def import_assignments(
             created = resp.json()
 
             new_id = _coerce_int(created.get("id"))
-            if old_id is not None and new_id is not None:
-                asg_id_map[old_id] = new_id
+            # if old_id is not None and new_id is not None:
+            #     asg_id_map[old_id] = new_id
+            record_mapping(
+                old_id=old_id,
+                new_id=new_id,
+                old_slug=None,   # assignments don’t have slugs
+                new_slug=None,
+                id_map=asg_id_map,
+                # slug_map={},   handled in mapping.py  # not used for assignments 
+            )
 
             imported += 1
             logger.info("Created assignment '%s' old_id=%s new_id=%s", name, old_id, new_id)

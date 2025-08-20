@@ -69,3 +69,21 @@ def test_record_mapping_ignores_none_values():
 
     assert id_map == {}
     assert slug_map == {}
+    
+def test_record_mapping_with_slug_map_none():
+    id_map = {}
+
+    # Slug mapping is ignored if slug_map=None
+    from utils.mapping import record_mapping
+    record_mapping(
+        old_id=10,
+        new_id=20,
+        old_slug="old-slug",
+        new_slug="new-slug",
+        id_map=id_map,
+        slug_map=None,
+    )
+
+    # Only id map should be updated
+    assert id_map == {10: 20}
+
