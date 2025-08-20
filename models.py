@@ -9,15 +9,16 @@ Artifact = Literal["course", "pages", "modules", "assignments", "files", "quizze
 
 @dataclass(frozen=True, slots=True)
 class PageMeta:
-    id: int
-    url: str
-    title: str
-    position: int # Export-only reference; ignored by import. Use ModuleItemMeta.position.
-    module_item_ids: List[int]
-    published: bool
-    updated_at: str  # Expected ISO-8601; normalized on init
-    html_path: str  # relative to export/data/{course_id}
-    source_api_url: str
+    id: Optional[int]
+    url: Optional[str]
+    title: Optional[str]
+    position: Optional[int] = None# Export-only reference; ignored by import. Use ModuleItemMeta.position.
+    module_item_ids: List[int] = field(default_factory=list)
+    published: bool = True
+    updated_at: Optional[str] = None  # Expected ISO-8601; normalized on init
+    html_path: Optional[str] = None # relative to export/data/{course_id}
+    source_api_url: Optional[str] = None
+    front_page: bool = False 
     
     def __post_init__(self):
         object.__setattr__(self, "updated_at", normalize_iso8601(self.updated_at) or self.updated_at)
