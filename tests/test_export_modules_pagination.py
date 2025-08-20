@@ -6,17 +6,19 @@ def test_export_modules_pagination(tmp_output, requests_mock):
     course_id = 303
     base_api = "https://canvas.test/api/v1"
 
-    # Page 1 of modules (with Link header for next)
+    # Page 1 of modules (with lowercase 'link' header for next)
     requests_mock.get(
         f"{base_api}/courses/{course_id}/modules",
         json=[{"id": 1, "name": "Module 1", "position": 1}],
-        headers={"Link": f'<{base_api}/courses/{course_id}/modules?page=2>; rel="next"'}
+        # headers={"Link": f'<{base_api}/courses/{course_id}/modules?page=2>; rel="next"'}
+        headers={"link": f'<{base_api}/courses/{course_id}/modules?page=2>; rel="next"'}
+
     )
 
-    # Page 2 of modules
+    # Page 2 of modules (no Link header -> end of pagination)
     requests_mock.get(
         f"{base_api}/courses/{course_id}/modules?page=2",
-        json=[{"id": 2, "name": "Module 2", "position": 2}]
+        json=[{"id": 2, "name": "Module 2", "position": 2}],
     )
 
     # Module 1 items (single page)

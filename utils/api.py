@@ -118,9 +118,10 @@ class CanvasAPI:
         params.setdefault("per_page", DEFAULT_PER_PAGE)
 
         results: List[Dict[str, Any]] = []
+        ###
         while url:
             # Only send params on the first request; follow-ups use absolute next URLs.
-            r = self._request("GET", url, params=params if results == [] else None)
+            r = self._request("GET", url, params=params if not results else None)
             data = r.json()
 
             if isinstance(data, list):
@@ -128,36 +129,28 @@ class CanvasAPI:
             else:
                 return data  # single object; no pagination
 
-            # RFC 5988 Link header parsing; accept rel=next and rel="next"
-            next_url: Optional[str] = None
-            link_hdr = r.headers.get("Link") or r.headers.get("link")
-            if link_hdr:
-                # Split on commas for multiple links
-                for raw_link in link_hdr.split(","):
-                    link = raw_link.strip()
-                    if not link:
-                        continue
-                    # Expect format: <url>; rel=next  OR  <url>; rel="next"
-                    parts = [p.strip() for p in link.split(";")]
-                    if not parts or not parts[0].startswith("<") or ">" not in parts[0]:
-                        continue
-                    url_part = parts[0]
-                    # Find a rel part in the remaining segments
-                    rel_token = None
-                    for p in parts[1:]:
-                        # normalize to lowercase for comparison
-                        pl = p.lower()
-                        if pl.startswith("rel="):
-                            rel_token = pl  # e.g., rel=next  or  rel="next"
-                            break
-                    if rel_token and (rel_token == "rel=next" or rel_token == 'rel="next"'):
-                        next_url = url_part[url_part.find("<") + 1 : url_part.find(">")]
-                        break
-
-            url = next_url
-
+            # RFC5988 Link header parsing (rel=next or rel="next")
+            url = self._next_link(r.headers)
+ 
         return results
 
+    def _next_link(self, headers: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract the 'next' URL from an RFC5988 Link header.
+        Accepts rel=next and rel="next". Returns None if not present.
+        """
+        link_hdr = headers.get("Link") or headers.get("link")
+        if not link_hdr:
+            return None
+        for raw in link_hdr.split(","):
+            parts = [p.strip() for p in raw.split(";")]
+            if not parts or not (parts[0].startswith("<") and ">" in parts[0]):
+                continue
+            url_part = parts[0]
+            rel_parts = [p.lower() for p in parts[1:]]
+            if any(r == "rel=next" or r == 'rel="next"' for r in rel_parts):
+                return url_part[url_part.find("<") + 1 : url_part.find(">")]
+        return None
     
     def post(self, endpoint: str, *, json: Optional[Dict[str, Any]] = None,
              data: Optional[Dict[str, Any]] = None, files=None, params=None) -> requests.Response:
