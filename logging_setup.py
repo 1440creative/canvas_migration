@@ -1,4 +1,4 @@
-# canvas_migration/logging_setup.py
+# canvas_migrations/logging_setup.py
 from __future__ import annotations
 
 import logging
@@ -40,11 +40,12 @@ def setup_logging(verbosity: int = 1) -> None:
             }
         },
         "loggers": {
-            "canvas_migration": {"handlers": ["console"], "level": level, "propagate": False}
+            "canvas_migrations": {"handlers": ["console"], "level": level, "propagate": False}
         },
         "filters": {
             "default_context": {
-                "()": "logging_setup.DefaultContextFilter"
+                #"()": "logging_setup.DefaultContextFilter"
+                "()": DefaultContextFilter, # <-- callable (avoids issues with dotted-path)
             }
         },
     })
@@ -78,5 +79,5 @@ def get_logger(*, artifact: str, course_id: int) -> logging.LoggerAdapter:
         log = get_logger(artifact="pages", course_id=101)
         log.info("starting export", extra={"count": 12})
     """
-    base = logging.getLogger("canvas_migration")
+    base = logging.getLogger("canvas_migrations")
     return _Adapter(base, extra={"artifact": artifact, "course_id": course_id})

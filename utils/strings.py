@@ -1,21 +1,35 @@
-#
-
+# utils/strings.py
 from __future__ import annotations
 import re
+import unicodedata
 
-# Allow alnum, dot, underscore, dash; collapse everything else to '-'
-_slug_rx = re.compile(r"[^a-zA-Z0-9._-]+")
+_slug_sep_re = re.compile(r"[\s_]+", flags=re.UNICODE)
+_non_alnum_hyphen_re = re.compile(r"[^a-z0-9\-]+", flags=re.UNICODE)
+_multi_hyphen_re = re.compile(r"-{2,}")
+
+import re
+import unicodedata
 
 def sanitize_slug(s: str) -> str:
     """
-    Filesystem-safe slug for deterministic paths.
-    - spaces -> '-'
-    - disallowed chars -> '-'
-    - collapse multiple '-' -> single '-'
-    - lowercase and trim leading/trailing '-'
+    Slug rules:
+      - Unicode normalize + strip accents
+      - Lowercase
+      - Replace any run of non [a-z0-9] with "-"
+      - Collapse multiple "-" and trim from ends
     """
-    s = s.strip().replace(" ", "-")
-    s = _slug_rx.sub("-", s)
-    s = re.sub(r"-{2,}", "-", s)
-    return s.strip("-").lower()
+    if not s:
+        return ""
+    # Normalize to ASCII
+    norm = unicodedata.normalize("NFKD", s)
+    ascii_s = norm.encode("ascii", "ignore").decode("ascii")
 
+    # Lowercase
+    lower = ascii_s.lower()
+
+    # Turn *any* non-alnum run (spaces, underscores, punctuation, etc.) into "-"
+    slug = re.sub(r"[^a-z0-9]+", "-", lower)
+
+    # Collapse/trim hyphens
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug

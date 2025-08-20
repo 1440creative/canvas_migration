@@ -1,33 +1,82 @@
-# ignore env
+# ─────────────────────────────────────────────────────────────────────────────
+# Environment / secrets
+# ─────────────────────────────────────────────────────────────────────────────
 .env
 
-# python cache
+# ─────────────────────────────────────────────────────────────────────────────
+# Python caches / artifacts
+# ─────────────────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 
-# os files
-.DS_Store
+# Test caches & coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.pycover
+*.log
 
-# venvs
+# ─────────────────────────────────────────────────────────────────────────────
+# Virtual environments
+# ─────────────────────────────────────────────────────────────────────────────
+.venv/
 venv/
+env/
+ENV/
+.conda/
 
-# Ignore exported course data
+# ─────────────────────────────────────────────────────────────────────────────
+# Packaging / distribution
+# ─────────────────────────────────────────────────────────────────────────────
+.Python
+build/
+dist/
+downloads/
+develop-eggs/
+eggs/
+.eggs/
+sdist/
+var/
+wheels/
+share/python-wheels/
+pip-wheel-metadata/
+*.egg-info/
+*.egg
+.installed.cfg
+MANIFEST
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Editors / OS junk
+# ─────────────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Project-specific
+# ─────────────────────────────────────────────────────────────────────────────
+# Exported course data
 export/data/
 export/test_data/
+sandbox_export/
 
-# zip course for share with GPT
+# Zip bundles for sharing
 *.zip
-
 
 # Temp / backup files
 *.bak
 tmp_test_root/
-docs/gpt_context.md
-docs/working_notes.md
-docs/working_notes-*.md
-docs/working_plan-*.md
-docs/gpt_chat/
 
-# ChatGPT scratch
-project-structure-*.txt
-docs/_gpt_chat/IMPORT_HANDOFF-*.md
+# Notes and chat
+docs/gpt_context.md
+docs/working_*.md
+docs/_gpt_chat/*
+docs/structure/*
+
+# Scratch state
+id_map.json

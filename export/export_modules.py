@@ -23,8 +23,9 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
     ensure_dir(modules_root)
 
     # 1) Fetch modules list
-    log.info("fetching modules list", extra={"endpoint": f"courses/{course_id}/modules"})
-    modules = api.get(f"courses/{course_id}/modules", params={"per_page": 100})
+    log.info("fetching modules list", extra={"endpoint": f"/courses/{course_id}/modules"})
+    # CanvasAPI.get() already sets per_page and paginates via Link headers
+    modules = api.get(f"/courses/{course_id}/modules")
     if not isinstance(modules, list):
         raise TypeError("Expected list of modules from Canvas API")
 
@@ -50,7 +51,8 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
 
         # 2) Fetch items for each module
         log.info("fetching module items", extra={"module_id": module_id})
-        items = api.get(f"courses/{course_id}/modules/{module_id}/items", params={"per_page": 100})
+        items = api.get(f"/courses/{course_id}/modules/{module_id}/items")
+
         if not isinstance(items, list):
             raise TypeError("Expected list of module items from Canvas API")
 
@@ -116,9 +118,9 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
     assignments_updated = _backfill_by_id(
         course_root, "assignments", "assignment_metadata.json", "id", assignment_backrefs
     )
-    files_updated = _backfill_by_id(
-        course_root, "files", "file_metadata.json", "id", file_backrefs
-    )
+    #Files use sidecars like: files/.../filename.ext.metadata.json
+    files_updated = _backfill_file_sidecars_by_id(course_root, file_backrefs)
+
     quizzes_updated = _backfill_by_id(
         course_root, "quizzes", "quiz_metadata.json", "id", quiz_backrefs
     )
@@ -136,6 +138,9 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
             "discussions": discussions_updated,
         },
     )
+    
+    # NEW: write combined modules.json for the importer/dry-run
+    atomic_write(modules_root / "modules.json", json_dumps_stable(exported))
 
     log.info("exported modules complete", extra={"count": len(exported)})
     return exported
@@ -204,5 +209,33 @@ def _backfill_by_id(
             continue
         ids = id_to_ids.get(obj_id)
         if ids and _backfill_json_list(meta_path, ids):
+            updated += 1
+    return updated
+
+def _backfill_file_sidecars_by_id(
+    course_root: Path,
+    id_to_ids: Dict[int, List[int]],
+) -> int:
+    """
+    Match Canvas File ids to *.metadata.json sidecars and merge module_item_ids.
+    """
+    root = course_root / "files"
+    if not root.exists():
+        return 0
+
+    updated = 0
+    for sidecar in sorted(root.glob("**/*.metadata.json")):
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        fid = data.get("id")
+        if not isinstance(fid, int):
+            continue
+        ids = id_to_ids.get(fid)
+        if not ids:
+            continue
+        before = data.get("module_item_ids", [])
+        after = _merge_ids(before, ids)
+        if after != before:
+            data["module_item_ids"] = after
+            atomic_write(sidecar, json_dumps_stable(data))
             updated += 1
     return updated

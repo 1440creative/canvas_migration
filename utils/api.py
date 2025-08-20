@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import os
 import time
+import requests
+import logging
+import random
 from typing import Dict, Any, Optional, Union, List
 from urllib.parse import urljoin
 
-import requests
+
 from dotenv import load_dotenv
 
 # --- Tunables ---------------------------------------------------------------
@@ -14,6 +17,8 @@ DEFAULT_TIMEOUT = (5, 30)  # (connect, read) seconds
 DEFAULT_PER_PAGE = 100
 USER_AGENT = "CanvasMigrations/1.0 (+https://example.org)"  # customize
 API_PREFIX = "/api/v1"
+
+log = logging.getLogger(__name__)
 
 
 class CanvasAPI:
@@ -55,28 +60,53 @@ class CanvasAPI:
         for attempt in range(1, max_attempts + 1):
             try:
                 resp = self.session.request(method, url, timeout=DEFAULT_TIMEOUT, **kwargs)
+
                 if resp.status_code == 429:
                     retry_after = float(resp.headers.get("Retry-After", delay))
-                    time.sleep(retry_after)
+                    jitter = random.uniform(0, 0.25 * retry_after)
+                    wait_time = retry_after + jitter
+                    log.warning(
+                        "Rate limited: 429 received. Retrying after %.2fs (attempt %s/%s)",
+                        wait_time, attempt, max_attempts,
+                        extra={"url": url, "retry_after": retry_after},
+                    )
+                    time.sleep(wait_time)
                     continue
+
                 resp.raise_for_status()
                 return resp
+
             except requests.HTTPError as e:
                 status = getattr(e.response, "status_code", None)
                 if status and status >= 500 and attempt < max_attempts:
-                    time.sleep(delay)
+                    jitter = random.uniform(0, 0.25 * delay)
+                    wait_time = delay + jitter
+                    log.warning(
+                        "Server error %s. Retrying after %.2fs (attempt %s/%s)",
+                        status, wait_time, attempt, max_attempts,
+                        extra={"url": url},
+                    )
+                    time.sleep(wait_time)
                     delay *= 2
                     continue
                 raise
+
             except (requests.ConnectionError, requests.Timeout):
                 if attempt < max_attempts:
-                    time.sleep(delay)
+                    jitter = random.uniform(0, 0.25 * delay)
+                    wait_time = delay + jitter
+                    log.warning(
+                        "Connection/timeout error. Retrying after %.2fs (attempt %s/%s)",
+                        wait_time, attempt, max_attempts,
+                        extra={"url": url},
+                    )
+                    time.sleep(wait_time)
                     delay *= 2
                     continue
                 raise
 
     def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None
-            ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
         """
         GET with transparent pagination.
         - If the endpoint returns a list, we return a combined list across pages.
@@ -88,8 +118,10 @@ class CanvasAPI:
         params.setdefault("per_page", DEFAULT_PER_PAGE)
 
         results: List[Dict[str, Any]] = []
+        ###
         while url:
-            r = self._request("GET", url, params=params if results == [] else None)
+            # Only send params on the first request; follow-ups use absolute next URLs.
+            r = self._request("GET", url, params=params if not results else None)
             data = r.json()
 
             if isinstance(data, list):
@@ -97,16 +129,9 @@ class CanvasAPI:
             else:
                 return data  # single object; no pagination
 
-            # Look for RFC 5988 Link header "rel=next"
-            next_url: Optional[str] = None
-            link_hdr = r.headers.get("Link") or r.headers.get("link")
-            if link_hdr:
-                for link in link_hdr.split(","):
-                    if 'rel="next"' in link:
-                        next_url = link[link.find("<") + 1: link.find(">")]
-                        break
-            url = next_url
-
+            # RFC5988 Link header parsing (rel=next or rel="next")
+            url = self._next_link(r.headers)
+ 
         return results
     
     def post(self, endpoint: str, *, json: Optional[Dict[str, Any]] = None,
@@ -159,14 +184,112 @@ class CanvasAPI:
         return self.post_json(f"/api/v1/courses/{course_id}/files", payload=payload)
  
 
+    def _next_link(self, headers: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract the 'next' URL from an RFC5988 Link header.
+        Accepts rel=next and rel="next". Returns None if not present.
+        """
+        link_hdr = headers.get("Link") or headers.get("link")
+        if not link_hdr:
+            return None
+        for raw in link_hdr.split(","):
+            parts = [p.strip() for p in raw.split(";")]
+            if not parts or not (parts[0].startswith("<") and ">" in parts[0]):
+                continue
+            url_part = parts[0]
+            rel_parts = [p.lower() for p in parts[1:]]
+            if any(r == "rel=next" or r == 'rel="next"' for r in rel_parts):
+                return url_part[url_part.find("<") + 1 : url_part.find(">")]
+        return None
+    
+    def post(self, endpoint: str, *, json: Optional[Dict[str, Any]] = None,
+             data: Optional[Dict[str, Any]] = None, files=None, params=None) -> requests.Response:
+        """
+        Raw POST; returns Response. Prefer `json=` when sending JSON bodies because
+        the session sets Content-Type: application/json by default.
+        """
+        url = self._full_url(endpoint)
+        return self._request("POST", url, json=json, data=data, files=files, params=params)
 
-# Instantiate two API clients (source/on-prem and target/cloud)
-load_dotenv()  # read .env once
-source_api = CanvasAPI(
-    os.getenv("CANVAS_SOURCE_URL"),
-    os.getenv("CANVAS_SOURCE_TOKEN"),
-)
-target_api = CanvasAPI(
-    os.getenv("CANVAS_TARGET_URL"),
-    os.getenv("CANVAS_TARGET_TOKEN"),
-)
+    def put(self, endpoint: str, *, json: Optional[Dict[str, Any]] = None,
+            data: Optional[Dict[str, Any]] = None, files=None, params=None) -> requests.Response:
+        """Raw PUT; returns Response."""
+        url = self._full_url(endpoint)
+        return self._request("PUT", url, json=json, data=data, files=files, params=params)
+
+    def delete(self, endpoint: str, *, params: Optional[Dict[str, Any]] = None) -> requests.Response:
+        """Raw DELETE; returns Response."""
+        url = self._full_url(endpoint)
+        return self._request("DELETE", url, params=params)
+    
+    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
+        """
+        Perform a multipart/form-data POST (used for Canvas file uploads).
+        Strips the default Content-Type so requests can set it correctly.
+        """
+        headers = self.session.headers.copy()
+        headers.pop("Content-Type", None) # let requests set multipart boundary
+        resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp
+
+    def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convenience: POST with JSON body and return parsed JSON.
+        """
+        r = self.post(endpoint, json=payload)
+        return r.json()
+
+    # ---- Canvas-specific helpers ------------------------------------------
+
+    def begin_course_file_upload(
+        self,
+        course_id: int,
+        *,
+        name: str,
+        parent_folder_path: str,
+        on_duplicate: str = "overwrite",  # or "rename"
+    ) -> Dict[str, Any]:
+        """
+        Step 1 of Canvas file upload: returns {"upload_url": ..., "upload_params": {...}, ...}
+        Use `requests.post(upload_url, data=upload_params, files={"file": (...)})` for step 2.
+        """
+        payload = {
+            "name": name,
+            "parent_folder_path": parent_folder_path,
+            "on_duplicate": on_duplicate,
+        }
+        # Use JSON body to match session default header
+        return self.post_json(f"/api/v1/courses/{course_id}/files", payload=payload)
+ 
+
+# Instantiate API clients (source/on-prem and target/cloud) only if fully configured
+# load_dotenv()  # read .env once
+if not os.getenv("PYTHON_DOTENV_DISABLE"):
+    load_dotenv()  # read .env once
+
+def _maybe_api(url_env: str, token_env: str) -> Optional["CanvasAPI"]:
+    url = os.getenv(url_env)
+    token = os.getenv(token_env)
+    if url and token:
+        try:
+            return CanvasAPI(url, token)
+        except Exception:
+            # Leave uninitialized if constructor validation fails
+            return None
+    return None
+
+# Note: these may be None if env vars are not set.
+source_api: Optional["CanvasAPI"] = _maybe_api("CANVAS_SOURCE_URL", "CANVAS_SOURCE_TOKEN")
+target_api: Optional["CanvasAPI"] = _maybe_api("CANVAS_TARGET_URL", "CANVAS_TARGET_TOKEN")
+
+# Optional: make the module’s public surface explicit
+__all__ = [
+    "CanvasAPI",
+    "DEFAULT_TIMEOUT",
+    "DEFAULT_PER_PAGE",
+    "USER_AGENT",
+    "API_PREFIX",
+    "source_api",
+    "target_api",
+]
