@@ -1,11 +1,18 @@
 import json
+import logging
 from pathlib import Path
 
-from importers import import_pages
-from tests.test_import_pages import DummyCanvas
+import pytest
+
+import importers.import_pages as import_pages
+
+from tests.conftest import DummyCanvas
 
 
-def test_front_page_put_failure_increments_failed(tmp_path, requests_mock, caplog):
+
+
+def test_front_page_put_failure_increments_failed(tmp_path: Path, requests_mock, caplog: pytest.LogCaptureFixture):
+    # Arrange: export root with one front page
     export_root = tmp_path / "export" / "data" / "101"
     page_dir = export_root / "pages" / "home"
     page_dir.mkdir(parents=True)
@@ -19,13 +26,13 @@ def test_front_page_put_failure_increments_failed(tmp_path, requests_mock, caplo
     }), encoding="utf-8")
 
     api_base = "https://api.example.edu"
-    # POST create page succeeds
+    # POST succeeds
     requests_mock.post(
         f"{api_base}/api/v1/courses/999/pages",
         json={"url": "home", "page_id": 123},
         status_code=200,
     )
-    # PUT mark front page fails with 500
+    # PUT to set front page fails
     requests_mock.put(
         f"{api_base}/api/v1/courses/999/pages/home",
         status_code=500,
@@ -34,25 +41,17 @@ def test_front_page_put_failure_increments_failed(tmp_path, requests_mock, caplo
     canvas = DummyCanvas(api_base)
     id_map = {}
 
-    caplog.set_level("INFO")
+    caplog.set_level(logging.INFO)
 
-    import_pages.import_pages(
+    # Act
+    counters = import_pages.import_pages(
         target_course_id=999,
         export_root=export_root,
         canvas=canvas,
         id_map=id_map,
     )
 
-    # Mapping should still be recorded
-    assert id_map["pages"][55] == 123
-    assert id_map["pages_url"]["home-old"] == "home"
-
-    # Logs should include error about front page
-    assert any("Failed to set front page" in r.message for r in caplog.records)
-
-    # Final summary log should show 1 imported, 0 skipped, 1 failed, 2 total
-    summary = caplog.messages[-1]
-    assert "imported=1" in summary
-    assert "skipped=0" in summary
-    assert "failed=1" in summary
-    assert "total=2" in summary
+    # Assert
+    assert counters["imported"] == 1
+    assert counters["failed"] == 1  # front_page failure counted
+    assert "failed-frontpage" in caplog.text

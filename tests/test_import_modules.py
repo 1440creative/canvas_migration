@@ -10,29 +10,7 @@ import pytest
 # SUT
 from importers.import_modules import import_modules
 
-
-class DummyCanvasAPI:
-    """
-    Minimal stub of utils.api.CanvasAPI used for unit tests.
-    Records JSON POSTs and returns deterministic ids.
-    """
-    def __init__(self) -> None:
-        self.calls: List[Dict[str, Any]] = []
-        self._next_id = 1000
-
-    def post_json(self, url: str, **kwargs) -> Dict[str, Any]:
-        json = kwargs.get('payload', kwargs.get('json'))
-        self.calls.append({"url": url, "json": json})
-        # Modules endpoint returns a new module id.
-        if url.endswith("/modules"):
-            self._next_id += 1
-            return {"id": self._next_id, "name": json["module"]["name"]}
-        # Items endpoint returns a new item id.
-        if "/modules/" in url and url.endswith("/items"):
-            self._next_id += 1
-            return {"id": self._next_id}
-        # Default
-        return {}
+from tests.conftest import DummyCanvas
 
 
 @pytest.fixture()
@@ -70,7 +48,7 @@ def export_root(tmp_path: Path) -> Path:
 
 
 def test_import_modules_happy_path(export_root: Path) -> None:
-    canvas = DummyCanvasAPI()
+    canvas = DummyCanvas()
     id_map: Dict[str, Dict[Any, Any]] = {
         "files": {401: 1401},
         "pages": {},
@@ -154,7 +132,7 @@ def test_import_modules_skips_missing_mappings(export_root: Path) -> None:
     """
     If a required mapping is missing (e.g., Page slug), we skip that item rather than failing.
     """
-    canvas = DummyCanvasAPI()
+    canvas = DummyCanvas()
     id_map: Dict[str, Dict[Any, Any]] = {
         "files": {},
         "pages": {},

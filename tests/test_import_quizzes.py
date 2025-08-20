@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 import requests
 
+from tests.conftest import DummyCanvas
+
 
 def _load_quizzes_module(project_root: Path):
     mod_path = (project_root /"importers"/ "import_quizzes.py").resolve()
@@ -15,23 +17,6 @@ def _load_quizzes_module(project_root: Path):
     assert hasattr(mod, "import_quizzes") and callable(mod.import_quizzes), \
         "import_quizzes not found or not callable"
     return mod
-
-
-class DummyCanvas:
-    def __init__(self, api_base: str):
-        self.api_root = api_base.rstrip("/") + "/"
-        self.session = requests.Session()
-    def _full(self, ep: str) -> str:
-        ep = (ep or "").strip()
-        if ep.startswith("/api/v1"):
-            ep = ep[len("/api/v1"):]
-        return self.api_root + "api/v1/" + ep.lstrip("/")
-    def post(self, endpoint: str, **kwargs):
-        return self.session.post(self._full(endpoint), **kwargs)
-    def put(self, endpoint: str, **kwargs):
-        return self.session.put(self._full(endpoint), **kwargs)
-    def post_json(self, endpoint: str, *, payload: dict) -> dict:
-        r = self.post(endpoint, json=payload); r.raise_for_status(); return r.json()
 
 
 def test_import_quizzes_basic(tmp_path, requests_mock):

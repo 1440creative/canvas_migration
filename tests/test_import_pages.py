@@ -4,6 +4,8 @@ import importlib.util
 from pathlib import Path
 import requests
 
+from tests.conftest import DummyCanvas
+
 
 # ---- Loader (load import/import_pages.py by path since "import" is a keyword dir)
 def _load_pages_module(project_root: Path):
@@ -16,30 +18,6 @@ def _load_pages_module(project_root: Path):
     assert hasattr(mod, "import_pages") and callable(mod.import_pages), \
         "import_pages not found or not callable"
     return mod
-
-
-# ---- Minimal Canvas-like wrapper that plays well with requests_mock
-class DummyCanvas:
-    def __init__(self, api_base: str):
-        self.api_root = api_base.rstrip("/") + "/"
-        self.session = requests.Session()
-
-    def _full(self, ep: str) -> str:
-        ep = (ep or "").strip()
-        if ep.startswith("/api/v1"):
-            ep = ep[len("/api/v1"):]
-        return self.api_root + "api/v1/" + ep.lstrip("/")
-
-    def post(self, endpoint: str, **kwargs):
-        return self.session.post(self._full(endpoint), **kwargs)
-
-    def put(self, endpoint: str, **kwargs):
-        return self.session.put(self._full(endpoint), **kwargs)
-
-    def post_json(self, endpoint: str, *, payload: dict) -> dict:
-        r = self.post(endpoint, json=payload)
-        r.raise_for_status()
-        return r.json()
 
 
 def test_import_pages_happy_path(tmp_path, requests_mock):

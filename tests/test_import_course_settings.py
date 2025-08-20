@@ -4,25 +4,7 @@ import importlib.util
 from pathlib import Path
 import requests
 
-class DummyCanvasHTTP:
-    """
-    Canvas-like wrapper using real requests.Session so requests_mock can intercept.
-    """
-    def __init__(self, api_base: str):
-        self.api_root = api_base.rstrip("/") + "/"
-        self.session = requests.Session()
-
-    def _full(self, ep: str) -> str:
-        ep = (ep or "").strip()
-        if ep.startswith("/api/v1"):
-            ep = ep[len("/api/v1"):]
-        return self.api_root + "api/v1/" + ep.lstrip("/")
-
-    def put(self, endpoint: str, **kwargs):
-        return self.session.put(self._full(endpoint), **kwargs)
-
-    def post(self, endpoint: str, **kwargs):
-        return self.session.post(self._full(endpoint), **kwargs)
+from tests.conftest import DummyCanvas
 
 
 def _load_module(project_root: Path):
@@ -61,7 +43,7 @@ def test_import_course_settings_updates_fields_and_settings(tmp_path, requests_m
     requests_mock.put(f"{api_base}/api/v1/courses/222/settings", json={"ok": True}, status_code=200)
 
     mod = _load_module(Path.cwd())
-    canvas = DummyCanvasHTTP(api_base)
+    canvas = DummyCanvas(api_base)
 
     mod.import_course_settings(
         target_course_id=222,

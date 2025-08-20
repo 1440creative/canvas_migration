@@ -6,6 +6,9 @@ import importlib.util
 import pytest
 import requests
 
+from tests.conftest import DummyCanvas
+
+
 
 def load_importer(project_root: Path):
     mod_path = (project_root /"importers"/ "import_files.py").resolve()
@@ -24,41 +27,7 @@ def load_importer(project_root: Path):
     )
     return mod
 
-class DummyCanvas:
-    """
-    Minimal Canvas-like wrapper that matches your utils/api.CanvasAPI surface.
-    Uses a real requests.Session so requests_mock can intercept calls.
-    """
-    def __init__(self, api_base: str):
-        self.api_root = api_base.rstrip("/") + "/"
-        self.session = requests.Session()
 
-    # methods the importer expects
-    def post(self, path: str, **kwargs):
-        url = self._full_url(path)
-        return self.session.post(url, **kwargs)
-
-    def post_json(self, endpoint: str, *, payload: dict) -> dict:
-        r = self.post(endpoint, json=payload)
-        r.raise_for_status()
-        return r.json()
-
-    def begin_course_file_upload(self, course_id: int, *, name: str,
-                                 parent_folder_path: str, on_duplicate: str = "overwrite") -> dict:
-        payload = {
-            "name": name,
-            "parent_folder_path": parent_folder_path,
-            "on_duplicate": on_duplicate,
-        }
-        return self.post_json(f"/api/v1/courses/{course_id}/files", payload=payload)
-
-    # tiny URL joiner compatible with your utils/api._full_url behavior
-    def _full_url(self, endpoint: str) -> str:
-        ep = (endpoint or "").strip()
-        if ep.startswith("/api/v1"):
-            ep = ep[len("/api/v1"):]
-        ep = ep.lstrip("/")
-        return self.api_root + "api/v1/" + ep
 
 
 def test_import_files_upload_flow(tmp_path, requests_mock):
