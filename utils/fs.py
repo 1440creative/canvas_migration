@@ -22,20 +22,24 @@ def atomic_write(path: Path, data: str | bytes) -> None:
     """
     ensure_dir(path.parent)
     mode = "wb" if isinstance(data, (bytes, bytearray)) else "w"
-    # create tmp in same directory so os.replace is atomic on the filesystem
-    with tempfile.NamedTemporaryFile(delete=False, dir=path.parent) as tmp:
-        tmp_path = Path(tmp.name)
+    encoding = None if "b" in mode else "utf-8"
+
+    # Create tmp in same directory so os.replace is atomic on the filesystem
+    tmp_fd, tmp_name = tempfile.mkstemp(dir=path.parent)
+    tmp_path = Path(tmp_name)
     try:
-        with open(tmp_path, mode, encoding=None if "b" in mode else "utf-8") as f:
+        with os.fdopen(tmp_fd, mode, encoding=encoding) as f:
             f.write(data)  # type: ignore[arg-type]
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp_path, path)
     finally:
         try:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
         except Exception:
-            # best-effort cleanup
             pass
+
 
 
 def json_dumps_stable(obj: Any) -> str:
