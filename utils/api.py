@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import os
 import time
+import requests
+import logging
+import random
 from typing import Dict, Any, Optional, Union, List
 from urllib.parse import urljoin
 
-import requests
+
 from dotenv import load_dotenv
 
 # --- Tunables ---------------------------------------------------------------
@@ -14,6 +17,8 @@ DEFAULT_TIMEOUT = (5, 30)  # (connect, read) seconds
 DEFAULT_PER_PAGE = 100
 USER_AGENT = "CanvasMigrations/1.0 (+https://example.org)"  # customize
 API_PREFIX = "/api/v1"
+
+log = logging.getLogger(__name__)
 
 
 class CanvasAPI:
@@ -55,22 +60,47 @@ class CanvasAPI:
         for attempt in range(1, max_attempts + 1):
             try:
                 resp = self.session.request(method, url, timeout=DEFAULT_TIMEOUT, **kwargs)
+
                 if resp.status_code == 429:
                     retry_after = float(resp.headers.get("Retry-After", delay))
-                    time.sleep(retry_after)
+                    jitter = random.uniform(0, 0.25 * retry_after)
+                    wait_time = retry_after + jitter
+                    log.warning(
+                        "Rate limited: 429 received. Retrying after %.2fs (attempt %s/%s)",
+                        wait_time, attempt, max_attempts,
+                        extra={"url": url, "retry_after": retry_after},
+                    )
+                    time.sleep(wait_time)
                     continue
+
                 resp.raise_for_status()
                 return resp
+
             except requests.HTTPError as e:
                 status = getattr(e.response, "status_code", None)
                 if status and status >= 500 and attempt < max_attempts:
-                    time.sleep(delay)
+                    jitter = random.uniform(0, 0.25 * delay)
+                    wait_time = delay + jitter
+                    log.warning(
+                        "Server error %s. Retrying after %.2fs (attempt %s/%s)",
+                        status, wait_time, attempt, max_attempts,
+                        extra={"url": url},
+                    )
+                    time.sleep(wait_time)
                     delay *= 2
                     continue
                 raise
+
             except (requests.ConnectionError, requests.Timeout):
                 if attempt < max_attempts:
-                    time.sleep(delay)
+                    jitter = random.uniform(0, 0.25 * delay)
+                    wait_time = delay + jitter
+                    log.warning(
+                        "Connection/timeout error. Retrying after %.2fs (attempt %s/%s)",
+                        wait_time, attempt, max_attempts,
+                        extra={"url": url},
+                    )
+                    time.sleep(wait_time)
                     delay *= 2
                     continue
                 raise
@@ -189,18 +219,6 @@ class CanvasAPI:
         # Use JSON body to match session default header
         return self.post_json(f"/api/v1/courses/{course_id}/files", payload=payload)
  
-
-
-# # Instantiate two API clients (source/on-prem and target/cloud)
-# load_dotenv()  # read .env once
-# source_api = CanvasAPI(
-#     os.getenv("CANVAS_SOURCE_URL"),
-#     os.getenv("CANVAS_SOURCE_TOKEN"),
-# )
-# target_api = CanvasAPI(
-#     os.getenv("CANVAS_TARGET_URL"),
-#     os.getenv("CANVAS_TARGET_TOKEN"),
-# )
 
 # Instantiate API clients (source/on-prem and target/cloud) only if fully configured
 # load_dotenv()  # read .env once
