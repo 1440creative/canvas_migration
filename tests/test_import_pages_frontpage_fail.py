@@ -34,7 +34,7 @@ def test_front_page_put_failure_increments_failed(tmp_path, requests_mock, caplo
     canvas = DummyCanvas(api_base)
     id_map = {}
 
-    caplog.set_level("ERROR")
+    caplog.set_level("INFO")
 
     import_pages.import_pages(
         target_course_id=999,
@@ -47,5 +47,12 @@ def test_front_page_put_failure_increments_failed(tmp_path, requests_mock, caplo
     assert id_map["pages"][55] == 123
     assert id_map["pages_url"]["home-old"] == "home"
 
-    # But we should see an error log about front page
+    # Logs should include error about front page
     assert any("Failed to set front page" in r.message for r in caplog.records)
+
+    # Final summary log should show 1 imported, 0 skipped, 1 failed, 2 total
+    summary = caplog.messages[-1]
+    assert "imported=1" in summary
+    assert "skipped=0" in summary
+    assert "failed=1" in summary
+    assert "total=2" in summary

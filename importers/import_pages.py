@@ -134,7 +134,13 @@ def import_pages(
             )
 
             if is_front_page and new_url:
-                _set_front_page(canvas=canvas, course_id=target_course_id, url=new_url, logger=logger)
+                success = _set_front_page(
+                    canvas=canvas, 
+                    course_id=target_course_id,
+                    url=new_url, logger=logger
+                )
+                if not success:
+                    failed += 1
 
 
             imported += 1
