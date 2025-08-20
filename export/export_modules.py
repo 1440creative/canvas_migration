@@ -23,8 +23,9 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
     ensure_dir(modules_root)
 
     # 1) Fetch modules list
-    log.info("fetching modules list", extra={"endpoint": f"courses/{course_id}/modules"})
-    modules = api.get(f"courses/{course_id}/modules", params={"per_page": 100})
+    log.info("fetching modules list", extra={"endpoint": f"/courses/{course_id}/modules"})
+    # CanvasAPI.get() already sets per_page and paginates via Link headers
+    modules = api.get(f"/courses/{course_id}/modules")
     if not isinstance(modules, list):
         raise TypeError("Expected list of modules from Canvas API")
 
@@ -50,7 +51,8 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
 
         # 2) Fetch items for each module
         log.info("fetching module items", extra={"module_id": module_id})
-        items = api.get(f"courses/{course_id}/modules/{module_id}/items", params={"per_page": 100})
+        items = api.get(f"/courses/{course_id}/modules/{module_id}/items")
+
         if not isinstance(items, list):
             raise TypeError("Expected list of module items from Canvas API")
 
