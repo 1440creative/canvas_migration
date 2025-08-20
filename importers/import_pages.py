@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, Protocol
 
 from logging_setup import get_logger
 from models import PageMeta
+from utils.mapping import record_mapping
 
 _WARNED_PAGE_POSITION = False
 
@@ -123,10 +124,14 @@ def import_pages(
             new_url = new_page.get("url") or new_page.get("slug")
             new_page_id = _coerce_int(new_page.get("page_id") or new_page.get("id"))
 
-            if old_id is not None and new_page_id is not None:
-                page_id_map[old_id] = new_page_id
-            if old_url and new_url:
-                page_url_map[str(old_url)] = str(new_url)
+            record_mapping(
+                old_id=old_id,
+                new_id=new_page_id,
+                old_slug=old_url,
+                new_slug=new_url,
+                id_map=page_id_map,
+                slug_map=page_url_map,
+            )
 
             if is_front_page and new_url:
                 _set_front_page(canvas=canvas, course_id=target_course_id, url=new_url)
