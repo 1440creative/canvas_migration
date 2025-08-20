@@ -191,13 +191,44 @@ class CanvasAPI:
  
 
 
-# Instantiate two API clients (source/on-prem and target/cloud)
-load_dotenv()  # read .env once
-source_api = CanvasAPI(
-    os.getenv("CANVAS_SOURCE_URL"),
-    os.getenv("CANVAS_SOURCE_TOKEN"),
-)
-target_api = CanvasAPI(
-    os.getenv("CANVAS_TARGET_URL"),
-    os.getenv("CANVAS_TARGET_TOKEN"),
-)
+# # Instantiate two API clients (source/on-prem and target/cloud)
+# load_dotenv()  # read .env once
+# source_api = CanvasAPI(
+#     os.getenv("CANVAS_SOURCE_URL"),
+#     os.getenv("CANVAS_SOURCE_TOKEN"),
+# )
+# target_api = CanvasAPI(
+#     os.getenv("CANVAS_TARGET_URL"),
+#     os.getenv("CANVAS_TARGET_TOKEN"),
+# )
+
+# Instantiate API clients (source/on-prem and target/cloud) only if fully configured
+# load_dotenv()  # read .env once
+if not os.getenv("PYTHON_DOTENV_DISABLE"):
+    load_dotenv()  # read .env once
+
+def _maybe_api(url_env: str, token_env: str) -> Optional["CanvasAPI"]:
+    url = os.getenv(url_env)
+    token = os.getenv(token_env)
+    if url and token:
+        try:
+            return CanvasAPI(url, token)
+        except Exception:
+            # Leave uninitialized if constructor validation fails
+            return None
+    return None
+
+# Note: these may be None if env vars are not set.
+source_api: Optional["CanvasAPI"] = _maybe_api("CANVAS_SOURCE_URL", "CANVAS_SOURCE_TOKEN")
+target_api: Optional["CanvasAPI"] = _maybe_api("CANVAS_TARGET_URL", "CANVAS_TARGET_TOKEN")
+
+# Optional: make the module’s public surface explicit
+__all__ = [
+    "CanvasAPI",
+    "DEFAULT_TIMEOUT",
+    "DEFAULT_PER_PAGE",
+    "USER_AGENT",
+    "API_PREFIX",
+    "source_api",
+    "target_api",
+]
