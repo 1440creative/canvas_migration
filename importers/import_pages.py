@@ -6,20 +6,27 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from utils.api import CanvasAPI
-
 log = logging.getLogger("canvas_migrations")
 
-_WARNED_PAGE_POSITION = False
+# Warn only once per run if exported position != server position
+_POSITION_MISMATCH_WARNED = False
 
 
 def import_pages(
     *,
     target_course_id: int,
     export_root: Path,
-    canvas: CanvasAPI,
+    canvas,  # CanvasAPI-like (needs: post, put, session.get)
     id_map: dict[str, dict],
 ) -> dict[str, int]:
+    """
+    Import wiki pages:
+      - POST /courses/:id/pages with title/body/published
+      - If POST returns only slug + Location, GET the Location to obtain numeric id
+      - Always record pages_url[old_slug] -> new_slug; record pages[old_id] -> new_id when available
+      - If front_page: True, PUT /courses/:id/front_page after creation
+      - If exported 'position' differs from server 'position', log a single 'position mismatch' warning
+    """
     counters = {"imported": 0, "skipped": 0, "failed": 0, "total": 0}
     pages_dir = export_root / "pages"
 
@@ -42,15 +49,10 @@ def import_pages(
             continue
 
         meta: dict[str, Any] = json.loads(metadata_file.read_text(encoding="utf-8"))
-
         counters["total"] += 1
-        old_id = meta.get("id")
-        old_url = meta.get("url")
 
-        global _WARNED_PAGE_POSITION
-        if "position" in meta and not _WARNED_PAGE_POSITION:
-            log.warning("course=%s artifact=pages position-field-ignored", target_course_id)
-            _WARNED_PAGE_POSITION = True
+        old_id = meta.get("id")
+        old_slug = meta.get("url") or None
 
         if not html_file.exists():
             alt_file = page_dir / "body.html"
@@ -62,40 +64,84 @@ def import_pages(
                 continue
 
         body = html_file.read_text(encoding="utf-8")
-        payload = {"title": meta.get("title"), "body": body, "published": meta.get("published", False)}
+        payload = {
+            "title": meta.get("title"),
+            "body": body,
+            "published": meta.get("published", False),
+        }
 
-        # unwrap response
-        resp = canvas.post(f"/courses/{target_course_id}/pages", json=payload)
-        resp_data = resp.json() if hasattr(resp, "json") else resp
-
-        if not resp_data or "url" not in resp_data:
-            log.error("course=%s artifact=pages failed-create page=%s", target_course_id, meta.get("title"))
+        # --- Create page
+        try:
+            resp = canvas.post(f"/courses/{target_course_id}/pages", json=payload)
+            # Try to parse JSON; tolerate empty/non-JSON
+            try:
+                data = resp.json()
+            except Exception:
+                data = {}
+        except Exception as e:
             counters["failed"] += 1
+            log.exception("course=%s artifact=pages failed-create-exception page=%s: %s",
+                          target_course_id, meta.get("title"), e)
             continue
 
-        new_url = resp_data["url"]
-        new_id = resp_data.get("page_id")
+        new_slug = data.get("url")
+        new_id = data.get("id") or data.get("page_id")
 
+        # If we don't have an id but a Location header exists, follow it to fetch id (+canonical slug)
+        if not new_id and "Location" in getattr(resp, "headers", {}):
+            try:
+                follow = canvas.session.get(resp.headers["Location"])
+                follow.raise_for_status()
+                try:
+                    j2 = follow.json()
+                except Exception:
+                    j2 = {}
+                new_id = j2.get("id") or j2.get("page_id") or new_id
+                new_slug = j2.get("url") or new_slug
+            except Exception as e:
+                # We'll still record slug mapping below if we have it
+                log.debug("course=%s artifact=pages follow-location failed: %s", target_course_id, e)
+
+        if not new_slug:
+            counters["failed"] += 1
+            log.error("course=%s artifact=pages failed-create page=%s (no slug returned)",
+                      target_course_id, meta.get("title"))
+            continue
+
+        # --- Update id maps
+        if old_slug:
+            id_map["pages_url"][old_slug] = new_slug
         if old_id is not None and new_id:
-            id_map["pages"][old_id] = new_id
-        if old_url:
-            id_map["pages_url"][old_url] = new_url
+            try:
+                id_map["pages"][int(old_id)] = int(new_id)
+            except Exception:
+                pass
+
+        # --- Position mismatch warning (once)
+        exp_pos = meta.get("position")
+        got_pos = data.get("position")
+        # If we followed Location, prefer the followed response for position
+        if not got_pos and 'j2' in locals():
+            got_pos = j2.get("position")
+
+        global _POSITION_MISMATCH_WARNED
+        if exp_pos is not None and got_pos is not None and exp_pos != got_pos and not _POSITION_MISMATCH_WARNED:
+            log.warning("course=%s artifact=pages position mismatch: exported=%s server=%s slug=%s",
+                        target_course_id, exp_pos, got_pos, new_slug)
+            _POSITION_MISMATCH_WARNED = True
 
         counters["imported"] += 1
 
+        # --- Front page: set after creation via /front_page
         if meta.get("front_page"):
-            put_resp = canvas.put(f"/courses/{target_course_id}/pages/{new_url}", json={"front_page": True})
-            put_data = put_resp.json() if hasattr(put_resp, "json") else put_resp
-            if not put_data:
-                log.error("course=%s artifact=pages failed-frontpage page=%s", target_course_id, new_url)
+            try:
+                canvas.put(f"/courses/{target_course_id}/front_page", json={"url": new_slug})
+            except Exception as e:
                 counters["failed"] += 1
+                log.error("course=%s artifact=pages failed-frontpage slug=%s: %s", target_course_id, new_slug, e)
 
     log.info(
         "course=%s artifact=pages Pages import complete. imported=%s skipped=%s failed=%s total=%s",
-        target_course_id,
-        counters["imported"],
-        counters["skipped"],
-        counters["failed"],
-        counters["total"],
+        target_course_id, counters["imported"], counters["skipped"], counters["failed"], counters["total"],
     )
     return counters
