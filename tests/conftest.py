@@ -49,7 +49,7 @@ class DummyCanvas:
     
     def _multipart_post(self, url: str, *, data, files):
         #same session; requests_mock intercept
-        return self.session.pot(url, data=data, files=files)
+        return self.session.post(url, data=data, files=files)
 
 @pytest.fixture
 def dummy_canvas():
