@@ -8,6 +8,12 @@ class DummyResponse:
 
     def json(self):
         return self._json
+    
+    def raise_for_status(self):
+        """Mimic requests.Response.raise_for_status()"""
+        if 400 <= self.status_code < 600:
+            raise Exception(f"HTTP {self.status_code} Error")
+        return None
 
 
 class DummyCanvas:
