@@ -30,6 +30,9 @@ class DummyCanvas:
         
     def post(self, endpoint, **kwargs):
         return self.session.post(self._url(endpoint), **kwargs)
+    
+    def put(self, endpoint, **kwargs):
+        return self.session.put(self._url(endpoint), **kwargs)
         
     def post_json(self, endpoint, *, payload):
         r = self.post(endpoint, json=payload)
