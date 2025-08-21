@@ -202,26 +202,6 @@ class CanvasAPI:
                 return url_part[url_part.find("<") + 1 : url_part.find(">")]
         return None
     
-    def post(self, endpoint: str, *, json: Optional[Dict[str, Any]] = None,
-             data: Optional[Dict[str, Any]] = None, files=None, params=None) -> requests.Response:
-        """
-        Raw POST; returns Response. Prefer `json=` when sending JSON bodies because
-        the session sets Content-Type: application/json by default.
-        """
-        url = self._full_url(endpoint)
-        return self._request("POST", url, json=json, data=data, files=files, params=params)
-
-    def put(self, endpoint: str, *, json: Optional[Dict[str, Any]] = None,
-            data: Optional[Dict[str, Any]] = None, files=None, params=None) -> requests.Response:
-        """Raw PUT; returns Response."""
-        url = self._full_url(endpoint)
-        return self._request("PUT", url, json=json, data=data, files=files, params=params)
-
-    def delete(self, endpoint: str, *, params: Optional[Dict[str, Any]] = None) -> requests.Response:
-        """Raw DELETE; returns Response."""
-        url = self._full_url(endpoint)
-        return self._request("DELETE", url, params=params)
-    
     def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
         """
         Perform a multipart/form-data POST (used for Canvas file uploads).
@@ -232,36 +212,6 @@ class CanvasAPI:
         resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
         return resp
-
-    def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Convenience: POST with JSON body and return parsed JSON.
-        """
-        r = self.post(endpoint, json=payload)
-        return r.json()
-
-    # ---- Canvas-specific helpers ------------------------------------------
-
-    def begin_course_file_upload(
-        self,
-        course_id: int,
-        *,
-        name: str,
-        parent_folder_path: str,
-        on_duplicate: str = "overwrite",  # or "rename"
-    ) -> Dict[str, Any]:
-        """
-        Step 1 of Canvas file upload: returns {"upload_url": ..., "upload_params": {...}, ...}
-        Use `requests.post(upload_url, data=upload_params, files={"file": (...)})` for step 2.
-        """
-        payload = {
-            "name": name,
-            "parent_folder_path": parent_folder_path,
-            "on_duplicate": on_duplicate,
-        }
-        # Use JSON body to match session default header
-        return self.post_json(f"/api/v1/courses/{course_id}/files", payload=payload)
- 
 
 # Instantiate API clients (source/on-prem and target/cloud) only if fully configured
 # load_dotenv()  # read .env once
