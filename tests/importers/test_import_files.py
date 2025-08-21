@@ -33,8 +33,8 @@ def test_upload_basic_updates_id_map(tmp_export, id_map, requests_mock, dummy_ca
     assert id_map["files"][42] == 9001  # int keys ok if you keep them as ints
     # manifest should be written and include the sha + new_id
     man = json.loads(_manifest_path(tmp_export).read_text(encoding="utf-8"))
-    assert "files/sub/inner/a.txt" in man
-    assert man["files/sub/inner/a.txt"]["new_id"] == 9001
+    assert "sub/inner/a.txt" in man
+    assert man["sub/inner/a.txt"]["new_id"] == 9001
 
 def test_upload_handles_redirect_finalize(tmp_export, id_map, requests_mock, dummy_canvas):
     p = _write_exported_file(tmp_export, "only/a.txt", file_id=7, file_name="a.txt", folder_path=None, content=b"abc")
@@ -62,6 +62,8 @@ def test_manifest_skip_counts_as_skipped(tmp_export, id_map, requests_mock, dumm
 
     # run again with no content change → should skip via manifest and not call uploads host
     requests_mock.reset_mock()  # ensure no HTTP is attempted on second run
+    caplog.set_level("INFO")    # capture INFO logs
+
 
     import_files(target_course_id=101, export_root=tmp_export, canvas=dummy_canvas, id_map=id_map)
 
