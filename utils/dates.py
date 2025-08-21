@@ -61,24 +61,3 @@ def now_utc_iso() -> str:
     """
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-def _fromisoformat_utc_aware(ts: str) -> datetime:
-    """
-    Parse an ISO-8601 string into an aware datetime.
-
-    - Accepts 'Z' suffix by translating to '+00:00'
-    - Accepts offsets like '+07:00'
-    - If the string is naive (no tz info), assume UTC
-    """
-    
-    s = ts.strip()
-    # normalize 'z' -> '+00:00' for fromisoformat()
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-        
-    dt = datetime.fromisoformat(s) # python 3.8+ offsets, fractionals
-    
-    if dt.tzinfo is None:
-        # Canvas should include TZ; treat naive
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
