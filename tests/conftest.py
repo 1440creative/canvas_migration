@@ -1,26 +1,30 @@
+# tests/conftest.py
 import requests
 
-
 class DummyCanvas:
-    """
-    Minimal Canvas-like wrapper that matches utils/api.CanvasAPI surface.
-    It calls requests.request directly so requests_mock can intercept.
-    """
-
     def __init__(self, api_base: str):
         self.api_base = api_base.rstrip("/")
 
-    def _record(self, method: str, path: str, json=None, **kwargs):
-        full_url = f"{self.api_base}{path}"
-        # 🔑 call requests directly, so requests_mock hooks in
-        resp = requests.request(method, full_url, json=json, **kwargs)
-        return resp  # <-- return the real Response, not a dummy
+    def _normalize_path(self, path: str) -> str:
+        # Ensure every call has /api/v1 prefix to match mocks
+        if not path.startswith("/api/v1"):
+            path = "/api/v1" + path
+        return path
 
-    def post(self, path: str, json=None, **kwargs):
-        return self._record("POST", path, json=json, **kwargs)
-
-    def put(self, path: str, json=None, **kwargs):
-        return self._record("PUT", path, json=json, **kwargs)
+    def _record(self, method: str, path: str, **kwargs):
+        full_url = self.api_base + self._normalize_path(path)
+        resp = requests.request(method, full_url, **kwargs)
+        resp.raise_for_status()
+        return resp
 
     def get(self, path: str, **kwargs):
         return self._record("GET", path, **kwargs)
+
+    def post(self, path: str, **kwargs):
+        return self._record("POST", path, **kwargs)
+
+    def put(self, path: str, **kwargs):
+        return self._record("PUT", path, **kwargs)
+
+    def delete(self, path: str, **kwargs):
+        return self._record("DELETE", path, **kwargs)

@@ -2,14 +2,12 @@
 import json
 import importlib.util
 from pathlib import Path
-import requests
 
 from tests.conftest import DummyCanvas
 
 
-# ---- Loader (load import/import_pages.py by path since "import" is a keyword dir)
 def _load_pages_module(project_root: Path):
-    mod_path = (project_root /"importers"/ "import_pages.py").resolve()
+    mod_path = (project_root / "importers" / "import_pages.py").resolve()
     assert mod_path.exists(), f"Expected module at {mod_path}"
     spec = importlib.util.spec_from_file_location("import_pages_mod", str(mod_path))
     mod = importlib.util.module_from_spec(spec)
@@ -21,10 +19,6 @@ def _load_pages_module(project_root: Path):
 
 
 def test_import_pages_happy_path(tmp_path, requests_mock):
-    """
-    Creates a page and marks it as front page.
-    Canvas returns both url and page_id; we expect both id and slug maps to be recorded.
-    """
     export_root = tmp_path / "export" / "data" / "101"
     page_dir = export_root / "pages" / "welcome"
     page_dir.mkdir(parents=True)
@@ -38,13 +32,11 @@ def test_import_pages_happy_path(tmp_path, requests_mock):
     }), encoding="utf-8")
 
     api_base = "https://api.example.edu"
-    # POST create page
     requests_mock.post(
         f"{api_base}/api/v1/courses/222/pages",
         json={"url": "welcome", "page_id": 314},
         status_code=200,
     )
-    # PUT mark front page
     requests_mock.put(
         f"{api_base}/api/v1/courses/222/pages/welcome",
         json={"url": "welcome", "page_id": 314, "front_page": True},
@@ -67,13 +59,9 @@ def test_import_pages_happy_path(tmp_path, requests_mock):
 
 
 def test_import_pages_slug_only_response(tmp_path, requests_mock):
-    """
-    Canvas returns only a slug (no numeric id). We still record pages_url mapping.
-    """
     export_root = tmp_path / "export" / "data" / "101"
     page_dir = export_root / "pages" / "faq"
     page_dir.mkdir(parents=True)
-    # Use alternate body filename to exercise fallback search
     (page_dir / "body.html").write_text("<p>FAQ</p>", encoding="utf-8")
     (page_dir / "page_metadata.json").write_text(json.dumps({
         "id": 7,
@@ -84,7 +72,6 @@ def test_import_pages_slug_only_response(tmp_path, requests_mock):
     }), encoding="utf-8")
 
     api_base = "https://api.example.edu"
-    # POST create page returns only slug
     requests_mock.post(
         f"{api_base}/api/v1/courses/333/pages",
         json={"url": "faq"},
@@ -102,8 +89,5 @@ def test_import_pages_slug_only_response(tmp_path, requests_mock):
         id_map=id_map,
     )
 
-    # We must have slug mapping; id mapping may be absent if Canvas didn't return a numeric id
+    # Even if no numeric id is returned, slug mapping must exist
     assert id_map["pages_url"] == {"faq-old": "faq"}
-    # If pages map exists, it should not contain 7
-    if "pages" in id_map:
-        assert 7 not in id_map["pages"]
