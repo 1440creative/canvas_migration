@@ -7,9 +7,6 @@ _slug_sep_re = re.compile(r"[\s_]+", flags=re.UNICODE)
 _non_alnum_hyphen_re = re.compile(r"[^a-z0-9\-]+", flags=re.UNICODE)
 _multi_hyphen_re = re.compile(r"-{2,}")
 
-import re
-import unicodedata
-
 def sanitize_slug(s: str) -> str:
     """
     Slug rules:
