@@ -1,4 +1,4 @@
-# import/import_files.py
+# importers/import_files.py
 """
 Import files into a Canvas course using your CanvasAPI-style wrapper.
 
@@ -19,18 +19,40 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, Protocol, Optional
+from typing import Dict, Any, Protocol, Optional, Mapping
 
 import requests
 from logging_setup import get_logger  # your project-level logger adapter
+from utils.fs import file_hashes
 
 __all__ = ["import_files"]
+
+# ---- Manifest helpers -------------------------------------------------------
+_MANIFEST_NAME = ".uploads_manifest.json"
+
+def _manifest_path(export_root: Path) -> Path:
+    return export_root / _MANIFEST_NAME
+
+def _load_manifest(export_root: Path) -> dict:
+    p = _manifest_path(export_root)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+def _save_manifest(export_root: Path, manifest: dict) -> None:
+    _manifest_path(export_root).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 # ---- Protocol to decouple from your exact CanvasAPI class -------------------
 class CanvasLike(Protocol):
-    session: requests.Session  # authenticated session with Authorization header
-    api_root: str              # e.g., "https://school.instructure.com/api/v1/"
+    session: requests.Session
+    api_root: str
 
     def post(self, endpoint: str, **kwargs) -> requests.Response: ...
     def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Dict[str, Any]: ...
@@ -42,6 +64,7 @@ class CanvasLike(Protocol):
         parent_folder_path: str,
         on_duplicate: str = "overwrite",
     ) -> Dict[str, Any]: ...
+    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response: ...  
 
 
 # ---- Helpers ----------------------------------------------------------------
@@ -80,18 +103,15 @@ def import_files(
 
     logger.info("Starting file import from %s", files_dir)
 
-    files_dir = export_root / "files"
-    if not files_dir.exists():
-        logger.warning("No files directory found at %s", files_dir)
-        return
-
-    logger.info("Starting file import from %s", files_dir)
 
     file_map = id_map.setdefault("files", {})
     imported = 0
     skipped = 0
     failed = 0
 
+    # Load uploads manifest once for the whole run
+    manifest: dict = _load_manifest(export_root)
+    
     # Find all sidecar metadata files produced by your exporter
     for meta_file in files_dir.rglob("*.metadata.json"):
         try:
@@ -122,7 +142,25 @@ def import_files(
         if not folder_path:
             parent_rel = Path(rel_path).parent.as_posix()
             folder_path = parent_rel if parent_rel not in ("", ".") else "/"
+            
+        # --- Check manifest for same blob (sha256) and skip if identical ---
+        try:
+            local_sha = file_hashes(exported_file)["sha256"]
+        except Exception as e:
+            local_sha = None
+            logger.debug("Could not compute sha256 for %s: %s", rel_path, e)
 
+        manifest_key = rel_path  # files/<subdirs>/<name>
+        if local_sha:
+            prev = manifest.get(manifest_key)
+            if prev and isinstance(prev, dict) and prev.get("sha256") == local_sha:
+                new_id_prev = prev.get("new_id")
+                if old_id is not None and isinstance(new_id_prev, int):
+                    file_map[old_id] = new_id_prev
+                skipped = 1
+                logger.info("Skipped upload (same sha256): %s → existing_id=%s", rel_path, new_id_prev)
+                continue
+            
         logger.debug(
             "Processing file: rel=%s old_id=%s folder=%s size=%s bytes",
             rel_path, old_id, folder_path, exported_file.stat().st_size
@@ -140,10 +178,19 @@ def import_files(
             file_map[old_id] = int(new_id)
             imported += 1
             logger.info("Uploaded %s → new_id=%s", rel_path, new_id)
+                        # Update manifest with the new sha and id
+            if local_sha:
+                manifest[manifest_key] = {"sha256": local_sha, "new_id": int(new_id)}
+                
         except Exception as e:
             failed += 1
             logger.exception("Failed to upload %s: %s", rel_path, e)
-
+    # Persist manifest at the end (best-effort)
+    try:
+        _save_manifest(export_root, manifest)
+    except Exception as e:
+        logger.warning("Could not save uploads manifest: %s", e)
+        
     logger.info(
         "File import complete. imported=%d skipped=%d failed=%d total=%d",
         imported, skipped, failed, imported + skipped + failed
@@ -173,33 +220,42 @@ def _upload_file_via_canvas_api(
     init_json = canvas.begin_course_file_upload(
         course_id=course_id,
         name=file_path.name,
-        parent_folder_path=folder_path,  # Canvas auto-creates folders
+        parent_folder_path=folder_path,
         on_duplicate=on_duplicate,
     )
-
     upload_url = init_json["upload_url"]
     upload_params = init_json.get("upload_params", {})
 
-    # Step 2: POST multipart to the upload_url (NOT the API host)
-    # Use a *plain* requests.post here; upload_url is a different host.
+    # Step 2: POST multipart to the upload_url (NOT the API host).
+    # Use the same session (via canvas._multipart_post) so tests can intercept with requests_mock.
     with open(file_path, "rb") as fh:
-        files = {"file": (file_path.name, fh)}
-        up = requests.post(upload_url, data=upload_params, files=files, allow_redirects=False)
+        up = canvas._multipart_post(
+            upload_url,
+            data=upload_params,
+            files={"file": (file_path.name, fh)},
+        )
 
-    # Step 3: Follow finalization redirect if present (use same auth session)
+    # Step 3: If the upload host responded with a redirect to Canvas, follow with the same session.
+    # Otherwise parse JSON from the upload response.
     if 300 <= up.status_code < 400 and "Location" in up.headers:
         finalize_url = up.headers["Location"]
         finalize = canvas.session.get(finalize_url)
         finalize.raise_for_status()
-        payload = finalize.json()
+        try:
+            payload = finalize.json()
+        except ValueError:
+            payload = {}
     else:
         up.raise_for_status()
-        payload = up.json()
+        try:
+            payload = up.json()
+        except ValueError:
+            payload = {}
 
     # Canvas may return the attachment directly or nested under "attachment"
-    if "id" in payload:
-        return int(payload["id"])
-    if "attachment" in payload and isinstance(payload["attachment"], dict) and "id" in payload["attachment"]:
+    if "id" in payload and isinstance(payload["id"], int):
+        return payload["id"]
+    if isinstance(payload.get("attachment"), dict) and "id" in payload["attachment"]:
         return int(payload["attachment"]["id"])
 
     logger.debug("Unexpected upload response payload: %s", payload)
