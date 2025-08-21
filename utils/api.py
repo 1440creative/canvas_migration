@@ -213,6 +213,31 @@ class CanvasAPI:
         resp.raise_for_status()
         return resp
 
+    @staticmethod
+    def _json_or_empty(resp: requests.Response) -> dict:
+        """
+        Return parsed JSON if the response looks like JSON; otherwise {}.
+        Safely handles 204, empty bodies, and malformed JSON.
+        """
+        if resp.status_code == 204 or not resp.content:
+            return {}
+        ctype = resp.headers.get("Content-Type", "")
+        if "json" in ctype.lower():
+            try:
+                return resp.json()
+            except ValueError:
+                return {}
+        return {}
+    
+    def _json_from_location(self, resp: requests.Response) -> dict:
+        loc = resp.headers.get("Location")
+        if not loc:
+            return {}
+        r2 = self._request("GET", loc)
+        return self._json_or_empty(r2)
+    
+    
+
 # Instantiate API clients (source/on-prem and target/cloud) only if fully configured
 # load_dotenv()  # read .env once
 if not os.getenv("PYTHON_DOTENV_DISABLE"):
