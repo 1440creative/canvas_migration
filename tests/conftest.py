@@ -78,3 +78,11 @@ class DummyCanvas:
         headers.pop("Content-Type", None)
         resp = self.session.post(url, data=data, files=files, headers=headers)
         return resp
+    
+# --- dynamic module loader for importer tests ---
+def load_importer(repo_root, module="importers.import_announcements"):
+    """Ensure repo_root is importable and return the requested importer module."""
+    import sys, importlib
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    return importlib.import_module(module)
