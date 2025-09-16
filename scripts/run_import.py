@@ -10,14 +10,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Dict, Any
 
-from utils.api import target_api
-if target_api is None:
-        raise SystemExit(
-            "ERROR: target_api is not configured. Set CANVAS_TARGET_URL and CANVAS_TARGET_TOKEN in your .env"
-        )
+# --- Ensure repo root is importable without needing PYTHONPATH=. ---
+THIS_FILE = Path(__file__).resolve()
+REPO_ROOT = THIS_FILE.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "course"]
@@ -134,8 +135,13 @@ def main() -> int:
     log = get_logger(artifact="runner", course_id=args.target_course_id)
     log.info("Starting import pipeline steps=%s export_root=%s", args.steps, args.export_root)
 
+    # Import the API client only now, after sys.path injection and dotenv load
     from utils.api import target_api  # type: ignore
+    if target_api is None:
+        log.error("target_api is not configured. Set CANVAS_TARGET_URL and CANVAS_TARGET_TOKEN in your .env")
+        return 2
 
+    # Import step implementations lazily
     from importers.import_pages import import_pages
     from importers.import_assignments import import_assignments
     from importers.import_quizzes import import_quizzes
