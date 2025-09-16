@@ -1,27 +1,10 @@
-# import/import_assignments.py
-"""
-Import Assignments into a Canvas course using your CanvasAPI-style wrapper.
-
-Expected export layout (per assignment directory):
-    assignments/<something>/
-      ├─ assignment_metadata.json   # includes id, name/title, points, dates, submission_types, etc.
-      └─ (optional) description.html
-
-This importer:
-  1) Loads assignment_metadata.json (+ description.html if present).
-  2) Creates the assignment via POST /api/v1/courses/{course_id}/assignments.
-  3) Records id_map["assignments"][old_id] = new_id.
-
-Notes:
-- We pass through only Canvas-accepted fields in the "assignment" envelope.
-- Description HTML is taken from file if present; otherwise metadata.get("description").
-"""
-
+# importers/import_assignments.py
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import Dict, Any, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol
 
 import requests
 from logging_setup import get_logger
@@ -29,17 +12,14 @@ from logging_setup import get_logger
 __all__ = ["import_assignments"]
 
 
-# ---- Protocol to decouple from your exact CanvasAPI class -------------------
 class CanvasLike(Protocol):
     session: requests.Session
-    api_root: str  # e.g., "https://school.instructure.com/api/v1/"
-
+    api_root: str
     def post(self, endpoint: str, **kwargs) -> requests.Response: ...
     def put(self, endpoint: str, **kwargs) -> requests.Response: ...
-    def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Dict[str, Any]: ...
+    def get(self, endpoint: str, **kwargs) -> Any: ...
 
 
-# ---- Helpers ----------------------------------------------------------------
 def _read_json(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -53,122 +33,139 @@ def _coerce_int(val: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
 
-# Map commonly exported metadata keys to Canvas "assignment" fields.
-# Anything not listed here is ignored for safety, but you can extend as needed.
-_ALLOWED_FIELDS = {
-    # Identity / core
-    "name", "title", "position", "published",
 
-    # Points & grading
-    "points_possible", "grading_type", "grading_standard_id",
-
-    # Dates (ISO8601 strings expected)
-    "due_at", "unlock_at", "lock_at",
-
-    # Submission / workflow
-    "submission_types", "allowed_extensions", "peer_reviews",
-    "automatic_peer_reviews", "grade_group_students_individually",
-    "muted", "omit_from_final_grade", "group_category_id",
-    "notify_of_update", "only_visible_to_overrides",
-
-    # Plagiarism / external tools (pass-through if present)
-    "turnitin_enabled", "vericite_enabled", "integration_id",
-    "external_tool_tag_attributes",  # for LTI: { url, new_tab, resource_link_id, ... }
-
-    # Misc
-    "assignment_group_id", "description", "rubric_settings",
-    "freeze_on_copy",
-}
-
-def _build_assignment_payload(metadata: Dict[str, Any], body_html: Optional[str]) -> Dict[str, Any]:
-    # Prefer "name"; fall back to "title"
-    name = metadata.get("name") or metadata.get("title")
-    payload: Dict[str, Any] = {}
-
-    for k in _ALLOWED_FIELDS:
-        if k in metadata and metadata[k] is not None:
-            payload[k] = metadata[k]
-
-    # Normalize name/title
-    if name:
-        payload["name"] = name
-        payload.pop("title", None)  # Canvas uses 'name'
-
-    # Prefer file HTML body if provided
-    if body_html is not None:
-        payload["description"] = body_html
-    # else if metadata already had 'description', we left it above
-
-    return {"assignment": payload}
+def _pick_desc_html(dir_: Path, meta: Dict[str, Any]) -> Optional[str]:
+    # honor explicit path if present; otherwise common fallbacks
+    rel = meta.get("html_path") or meta.get("description_path")
+    candidates = [rel] if rel else []
+    candidates += ["description.html", "index.html", "body.html"]
+    for name in candidates:
+        if not name:
+            continue
+        p = dir_ / name
+        if p.exists():
+            return _read_text_if_exists(p)
+    return None
 
 
-# ---- Public entrypoint ------------------------------------------------------
 def import_assignments(
     *,
     target_course_id: int,
     export_root: Path,
     canvas: CanvasLike,
-    id_map: Dict[str, Dict[int, int]],
-) -> None:
+    id_map: dict[str, dict],
+) -> dict[str, int]:
     """
-    Create assignments from export_root/assignments into the target course and update id_map.
+    Import assignments:
 
-    Produces/updates:
-        id_map["assignments"] : Dict[int(old_assignment_id) -> int(new_assignment_id)]
+      • POST /courses/:id/assignments with {"assignment": {...}}
+      • If POST returns Location and no id, GET the Location
+      • Record:
+           id_map['assignments'][old_id] -> new_id
     """
-    logger = get_logger(course_id=target_course_id, artifact="assignments")
+    log = get_logger(course_id=target_course_id, artifact="assignments")
+    counters = {"imported": 0, "skipped": 0, "failed": 0, "total": 0}
 
-    asg_dir = export_root / "assignments"
-    if not asg_dir.exists():
-        logger.warning("No assignments directory found at %s", asg_dir)
-        return
+    assign_dir = export_root / "assignments"
+    if not assign_dir.exists():
+        log.info("nothing-to-import at %s", assign_dir)
+        return counters
 
-    logger.info("Starting assignments import from %s", asg_dir)
+    id_map.setdefault("assignments", {})
 
-    asg_id_map = id_map.setdefault("assignments", {})
-    imported = 0
-    skipped = 0
-    failed = 0
+    # Optional limiter for debug sessions
+    limit_env = os.getenv("IMPORT_ASSIGNMENTS_LIMIT")
+    limit: Optional[int] = int(limit_env) if (limit_env and limit_env.isdigit()) else None
 
-    for meta_file in asg_dir.rglob("assignment_metadata.json"):
-        try:
-            meta = _read_json(meta_file)
-        except Exception as e:
-            failed += 1
-            logger.exception("Failed to read %s: %s", meta_file, e)
+    for item in sorted(assign_dir.iterdir()):
+        if not item.is_dir():
             continue
 
-        old_id = _coerce_int(meta.get("id"))
-        # Resolve HTML description file (optional)
-        html_path = meta_file.parent / (meta.get("html_path") or "description.html")
+        meta_path = item / "assignment_metadata.json"
+        if not meta_path.exists():
+            counters["skipped"] += 1
+            log.warning("missing_metadata dir=%s", item)
+            continue
 
-        body_html = _read_text_if_exists(html_path)
+        try:
+            meta = _read_json(meta_path)
+        except Exception as e:
+            counters["failed"] += 1
+            log.exception("failed to read metadata %s: %s", meta_path, e)
+            continue
 
-        # Canvas requires a name/title; skip if missing
+        counters["total"] += 1
+
         name = meta.get("name") or meta.get("title")
         if not name:
-            skipped += 1
-            logger.warning("Skipping %s (missing assignment name/title)", meta_file)
+            counters["skipped"] += 1
+            log.warning("skipping (missing name) %s", meta_path)
             continue
 
+        desc_html = _pick_desc_html(item, meta) or ""
+        assignment: Dict[str, Any] = {
+            "name": name,
+            "description": desc_html,
+            "published": bool(meta.get("published", False)),
+        }
+
+        # common optional fields if present
+        for k in [
+            "points_possible", "grading_type", "due_at", "lock_at", "unlock_at",
+            "submission_types", "allowed_attempts", "peer_reviews",
+            "omit_from_final_grade", "assignment_group_id",
+            "muted", "position", "time_estimate"
+        ]:
+            if meta.get(k) is not None:
+                assignment[k] = meta[k]
+
+        old_id = _coerce_int(meta.get("id"))
+
+        endpoint = f"/api/v1/courses/{target_course_id}/assignments"
+        log.debug("create assignment name=%r dir=%s", name, item)
         try:
-            payload = _build_assignment_payload(meta, body_html)
-            resp = canvas.post(f"/api/v1/courses/{target_course_id}/assignments", json=payload)
-            resp.raise_for_status()
-            created = resp.json()
-
-            new_id = _coerce_int(created.get("id"))
-            if old_id is not None and new_id is not None:
-                asg_id_map[old_id] = new_id
-
-            imported += 1
-            logger.info("Created assignment '%s' old_id=%s new_id=%s", name, old_id, new_id)
-
+            resp = canvas.post(endpoint, json={"assignment": assignment})
+            try:
+                data = resp.json()
+            except ValueError:
+                data = {}
         except Exception as e:
-            failed += 1
-            logger.exception("Failed to create assignment from %s: %s", meta_file.parent, e)
+            counters["failed"] += 1
+            log.exception("failed-create name=%s: %s", name, e)
+            continue
 
-    logger.info(
+        new_id = _coerce_int(data.get("id"))
+
+        # Follow Location when needed
+        if new_id is None and "Location" in resp.headers:
+            try:
+                follow = canvas.session.get(resp.headers["Location"])
+                follow.raise_for_status()
+                try:
+                    j2 = follow.json()
+                except ValueError:
+                    j2 = {}
+                new_id = _coerce_int(j2.get("id"))
+                data = j2 or data
+            except Exception as e:
+                log.debug("follow-location failed for assignment=%s: %s", name, e)
+
+        if new_id is None:
+            counters["failed"] += 1
+            log.error("failed-create (no id) name=%s", name)
+            continue
+
+        if old_id is not None:
+            id_map["assignments"][old_id] = new_id
+
+        counters["imported"] += 1
+
+        if limit is not None and counters["imported"] >= limit:
+            log.info("IMPORT_ASSIGNMENTS_LIMIT=%s reached; stopping early", limit)
+            break
+
+    log.info(
         "Assignments import complete. imported=%d skipped=%d failed=%d total=%d",
-        imported, skipped, failed, imported + skipped + failed
+        counters["imported"], counters["skipped"], counters["failed"], counters["total"],
     )
+    return counters

@@ -1,25 +1,10 @@
-# import/import_quizzes.py
-"""
-Import Quizzes into a Canvas course using your CanvasAPI-style wrapper.
-
-Expected export layout (per quiz directory):
-    quizzes/<something>/
-      ├─ quiz_metadata.json         # fields align with QuizMeta (see models.py)
-      ├─ (optional) description.html  or metadata["html_path"]
-      └─ (optional) questions.json    or questions/*.json  (if you exported questions)
-
-This importer:
-  1) Loads quiz_metadata.json (+ description HTML if present).
-  2) Creates the quiz via POST /api/v1/courses/{course_id}/quizzes.
-  3) Optionally creates questions if include_questions=True and data present.
-  4) Records id_map["quizzes"][old_id] = new_id.
-"""
-
+# importers/import_quizzes.py
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import Dict, Any, Optional, Protocol, List
+from typing import Any, Dict, Optional, Protocol
 
 import requests
 from logging_setup import get_logger
@@ -31,17 +16,15 @@ class CanvasLike(Protocol):
     session: requests.Session
     api_root: str
     def post(self, endpoint: str, **kwargs) -> requests.Response: ...
-    def put(self, endpoint: str, **kwargs) -> requests.Response: ...
-    def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Dict[str, Any]: ...
+    def get(self, endpoint: str, **kwargs) -> Any: ...
 
 
-# ---------- helpers ----------
 def _read_json(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def _read_text_if_exists(path: Path) -> Optional[str]:
-    return path.read_text(encoding="utf-8") if path.exists() else None
+def _read_text_if_exists(p: Path) -> Optional[str]:
+    return p.read_text(encoding="utf-8") if p.exists() else None
 
 def _coerce_int(val: Any) -> Optional[int]:
     try:
@@ -49,143 +32,158 @@ def _coerce_int(val: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
 
-# Allowed quiz fields Canvas accepts in "quiz" envelope.
-_ALLOWED_FIELDS = {
-    "title", "quiz_type", "description", "published",
-    "shuffle_answers", "time_limit", "allowed_attempts",
-    "scoring_policy", "one_question_at_a_time",
-    "due_at", "lock_at", "unlock_at",
-    "points_possible",
-}
 
-def _build_quiz_payload(meta: Dict[str, Any], description_html: Optional[str]) -> Dict[str, Any]:
-    quiz: Dict[str, Any] = {}
-    for k in _ALLOWED_FIELDS:
-        if k in meta and meta[k] is not None:
-            quiz[k] = meta[k]
-    # prefer file HTML for description
-    if description_html is not None:
-        quiz["description"] = description_html
-    # normalize: Canvas expects "title"
-    if "name" in meta and not quiz.get("title"):
-        quiz["title"] = meta["name"]
-    return {"quiz": quiz}
-
-def _load_questions(quiz_dir: Path) -> Optional[List[Dict[str, Any]]]:
-    # Prefer a single questions.json; otherwise gather questions/*.json
-    qfile = quiz_dir / "questions.json"
-    if qfile.exists():
-        data = _read_json(qfile)
-        # allow either {"questions":[...]} or a raw list
-        if isinstance(data, dict) and "questions" in data:
-            return list(data["questions"])
-        if isinstance(data, list):
-            return list(data)
-        return None
-
-    questions_dir = quiz_dir / "questions"
-    if questions_dir.exists():
-        qs: List[Dict[str, Any]] = []
-        for f in sorted(questions_dir.glob("*.json")):
-            obj = _read_json(f)
-            if isinstance(obj, dict):
-                qs.append(obj)
-        return qs if qs else None
-    return None
+def _pick_desc_html(dir_: Path, meta: Dict[str, Any]) -> str:
+    rel = meta.get("html_path")
+    candidates = [rel] if rel else []
+    candidates += ["description.html", "index.html", "body.html", "overview.html"]
+    for name in candidates:
+        if not name:
+            continue
+        p = dir_ / name
+        if p.exists():
+            return _read_text_if_exists(p) or ""
+    return ""
 
 
-# ---------- public entrypoint ----------
 def import_quizzes(
     *,
     target_course_id: int,
     export_root: Path,
     canvas: CanvasLike,
-    id_map: Dict[str, Dict[int, int]],
+    id_map: dict[str, dict],
     include_questions: bool = False,
-) -> None:
+) -> dict[str, int]:
     """
-    Create quizzes (and optionally their questions) and update id_map["quizzes"].
+    Import classic quizzes:
+
+      • POST /courses/:id/quizzes with {"quiz": {...}}
+      • Optionally POST questions from questions.json:
+          POST /courses/:id/quizzes/:quiz_id/questions with {"question": {...}}
+      • Record id_map['quizzes'][old_id] = new_id
     """
-    logger = get_logger(course_id=target_course_id, artifact="quizzes")
+    log = get_logger(course_id=target_course_id, artifact="quizzes")
+    counters = {"imported": 0, "skipped": 0, "failed": 0, "total": 0, "questions": 0}
 
     q_dir = export_root / "quizzes"
     if not q_dir.exists():
-        logger.warning("No quizzes directory found at %s", q_dir)
-        return
+        log.info("nothing-to-import at %s", q_dir)
+        return counters
 
-    logger.info("Starting quizzes import from %s", q_dir)
+    id_map.setdefault("quizzes", {})
 
-    quiz_id_map = id_map.setdefault("quizzes", {})
-    imported = 0
-    skipped = 0
-    failed = 0
+    limit_env = os.getenv("IMPORT_QUIZZES_LIMIT")
+    limit: Optional[int] = int(limit_env) if (limit_env and limit_env.isdigit()) else None
 
-    for meta_file in q_dir.rglob("quiz_metadata.json"):
-        meta: Dict[str, Any]
-        try:
-            meta = _read_json(meta_file)
-        except Exception as e:
-            failed += 1
-            logger.exception("Failed to read %s: %s", meta_file, e)
+    for item in sorted(q_dir.iterdir()):
+        if not item.is_dir():
             continue
 
-        old_id = _coerce_int(meta.get("id"))
+        meta_path = item / "quiz_metadata.json"
+        if not meta_path.exists():
+            counters["skipped"] += 1
+            log.warning("missing_metadata dir=%s", item)
+            continue
+
+        try:
+            meta = _read_json(meta_path)
+        except Exception as e:
+            counters["failed"] += 1
+            log.exception("failed to read metadata %s: %s", meta_path, e)
+            continue
+
+        counters["total"] += 1
+
         title = meta.get("title") or meta.get("name")
         if not title:
-            skipped += 1
-            logger.warning("Skipping %s (missing quiz title)", meta_file)
+            counters["skipped"] += 1
+            log.warning("skipping (missing title) %s", meta_path)
             continue
 
-        # Resolve description HTML path
-        html_rel = meta.get("html_path") or "description.html"
-        html_path = meta_file.parent / html_rel
-        description_html = _read_text_if_exists(html_path)
+        description_html = _pick_desc_html(item, meta)
 
+        quiz: Dict[str, Any] = {
+            "title": title,
+            "description": description_html,
+            "published": bool(meta.get("published", False)),
+        }
+        # Common optional fields
+        for k in [
+            "quiz_type", "time_limit", "shuffle_answers", "hide_results",
+            "one_question_at_a_time", "cant_go_back", "allowed_attempts",
+            "scoring_policy", "show_correct_answers", "due_at", "lock_at", "unlock_at",
+            "points_possible"
+        ]:
+            if meta.get(k) is not None:
+                quiz[k] = meta[k]
+
+        old_id = _coerce_int(meta.get("id"))
+
+        endpoint = f"/api/v1/courses/{target_course_id}/quizzes"
+        log.debug("create quiz title=%r dir=%s", title, item)
         try:
-            payload = _build_quiz_payload(meta, description_html)
-            create_resp = canvas.post(f"/api/v1/courses/{target_course_id}/quizzes", json=payload)
-            create_resp.raise_for_status()
-            created = create_resp.json()
-            new_quiz_id = _coerce_int(created.get("id"))
-
-            if include_questions:
-                qs = _load_questions(meta_file.parent)
-                if qs:
-                    _create_questions_bulk(canvas, target_course_id, new_quiz_id, qs, logger)
-
-            if old_id is not None and new_quiz_id is not None:
-                quiz_id_map[old_id] = new_quiz_id
-
-            imported += 1
-            logger.info("Created quiz '%s' old_id=%s new_id=%s", title, old_id, new_quiz_id)
-
+            resp = canvas.post(endpoint, json={"quiz": quiz})
+            try:
+                data = resp.json()
+            except ValueError:
+                data = {}
         except Exception as e:
-            failed += 1
-            logger.exception("Failed to create quiz from %s: %s", meta_file.parent, e)
+            counters["failed"] += 1
+            log.exception("failed-create title=%s: %s", title, e)
+            continue
 
-    logger.info(
-        "Quizzes import complete. imported=%d skipped=%d failed=%d total=%d",
-        imported, skipped, failed, imported + skipped + failed
+        new_id = _coerce_int(data.get("id"))
+
+        if new_id is None and "Location" in resp.headers:
+            try:
+                follow = canvas.session.get(resp.headers["Location"])
+                follow.raise_for_status()
+                try:
+                    j2 = follow.json()
+                except ValueError:
+                    j2 = {}
+                new_id = _coerce_int(j2.get("id"))
+                data = j2 or data
+            except Exception as e:
+                log.debug("follow-location failed for quiz=%s: %s", title, e)
+
+        if new_id is None:
+            counters["failed"] += 1
+            log.error("failed-create (no id) title=%s", title)
+            continue
+
+        if old_id is not None:
+            id_map["quizzes"][old_id] = new_id
+
+        # Questions (optional)
+        if include_questions:
+            q_json = item / "questions.json"
+            if q_json.exists():
+                try:
+                    payload = _read_json(q_json)
+                    questions = payload if isinstance(payload, list) else payload.get("questions", [])
+                except Exception as e:
+                    log.warning("failed to read questions.json for %s: %s", title, e)
+                    questions = []
+
+                for q in questions:
+                    try:
+                        canvas.post(
+                            f"/api/v1/courses/{target_course_id}/quizzes/{new_id}/questions",
+                            json={"question": q},
+                        )
+                        counters["questions"] += 1
+                    except Exception as e:
+                        log.warning("failed to create question for quiz=%s: %s", title, e)
+
+        counters["imported"] += 1
+
+        if limit is not None and counters["imported"] >= limit:
+            log.info("IMPORT_QUIZZES_LIMIT=%s reached; stopping early", limit)
+            break
+
+    log.info(
+        "Quizzes import complete. imported=%d skipped=%d failed=%d total=%d questions=%d",
+        counters["imported"], counters["skipped"], counters["failed"], counters["total"], counters["questions"],
     )
-
-
-# ---------- questions creation ----------
-def _create_questions_bulk(
-    canvas: CanvasLike,
-    course_id: int,
-    quiz_id: Optional[int],
-    questions: List[Dict[str, Any]],
-    logger,
-) -> None:
-    """
-    Create questions one by one via POST /courses/{course_id}/quizzes/{quiz_id}/questions.
-    The payload is {"question": {...}} per Canvas API.
-    """
-    if not quiz_id:
-        logger.warning("No quiz_id returned; skipping questions")
-        return
-
-    for q in questions:
-        payload = {"question": q}
-        resp = canvas.post(f"/api/v1/courses/{course_id}/quizzes/{quiz_id}/questions", json=payload)
-        resp.raise_for_status()
+    return counters
