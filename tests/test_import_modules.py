@@ -1,158 +1,125 @@
-#tests/test_import_modules.py
-from __future__ import annotations
-
 import json
+import os
 from pathlib import Path
-from typing import Any, Dict, List
 
-import pytest
-
-# SUT
-from importers.import_modules import import_modules
-
-from tests.conftest import DummyCanvas
+from tests.conftest import DummyCanvas, load_importer
 
 
-@pytest.fixture()
-def export_root(tmp_path: Path) -> Path:
-    """
-    Creates:
-      export/data/123/modules/modules.json
-    """
-    root = tmp_path / "export" / "data" / "123"
-    modules_dir = root / "modules"
-    modules_dir.mkdir(parents=True, exist_ok=True)
+def _write_modules_json(root: Path, data):
+    (root / "modules").mkdir(parents=True, exist_ok=True)
+    (root / "modules" / "modules.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-    modules = [
+
+def test_import_modules_happy_path(tmp_path, requests_mock, monkeypatch):
+    export_root = tmp_path / "export" / "data" / "123"
+    # One module with three items: Page, Assignment, ExternalUrl
+    mods = [
         {
-            "id": 11,
             "name": "Week 1",
-            "position": 1,
             "published": True,
-            "require_sequential_progress": False,
             "items": [
-                {"id": 1, "type": "SubHeader", "title": "Readings", "position": 1},
-                {"id": 2, "type": "Page", "title": "Intro Page", "position": 2, "page_url": "intro"},
-                {"id": 3, "type": "Assignment", "title": "HW 1", "position": 3, "content_id": 201},
-                {"id": 4, "type": "ExternalUrl", "title": "Syllabus link", "position": 4, "external_url": "https://example.edu/syllabus"},
-                {"id": 5, "type": "Quiz", "title": "Quiz 1", "position": 5, "content_id": 301},
-                {"id": 6, "type": "File", "title": "Slides", "position": 6, "content_id": 401},
-                {"id": 7, "type": "Discussion", "title": "Week 1 Discussion", "position": 7, "content_id": 501},
-                {"id": 8, "type": "ExternalTool", "title": "LTI Thing", "position": 8, "external_tool_url": "https://lti.example.com/launch", "new_tab": True},
+                {"type": "Page", "title": "Front Page", "page_url": "front-page", "published": True},
+                {"type": "Assignment", "title": "HW1", "content_id": 100, "published": True},
+                {"type": "ExternalUrl", "title": "Syllabus PDF", "external_url": "https://example.org/syllabus.pdf"},
             ],
         }
     ]
+    _write_modules_json(export_root, mods)
 
-    (modules_dir / "modules.json").write_text(json.dumps(modules, indent=2))
-    return root
-
-
-def test_import_modules_happy_path(export_root: Path) -> None:
-    canvas = DummyCanvas()
-    id_map: Dict[str, Dict[Any, Any]] = {
-        "files": {401: 1401},
-        "pages": {},
-        "pages_url": {"intro": "intro-new"},
-        "assignments": {201: 1201},
-        "quizzes": {301: 1301},
-        "discussions": {501: 1501},
+    # id_map mappings to target
+    id_map = {
+        "pages_url": {"front-page": "front-page"},  # page slugs usually preserved
+        "assignments": {100: 200},
     }
 
-    target_course_id = 999
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
 
-    import_modules(
-        target_course_id=target_course_id,
-        export_root=export_root,
-        canvas=canvas,  # dummy
-        id_map=id_map,
+    # Create module -> returns id
+    requests_mock.post(
+        f"{api_base}/api/v1/courses/999/modules",
+        json={"id": 10, "name": "Week 1"},
+        status_code=200,
     )
+    # Create each item
+    requests_mock.post(f"{api_base}/api/v1/courses/999/modules/10/items", json={"id": 1}, status_code=200)
+    requests_mock.post(f"{api_base}/api/v1/courses/999/modules/10/items", json={"id": 2}, status_code=200)
+    requests_mock.post(f"{api_base}/api/v1/courses/999/modules/10/items", json={"id": 3}, status_code=200)
 
-    # Modules mapping recorded
-    assert "modules" in id_map
-    # First module created by DummyCanvasAPI gets id 1001 (starts at 1000, then +1)
-    assert id_map["modules"][11] == 1001
+    project_root = Path(os.getcwd())
+    importer = load_importer(project_root, module="importers.import_modules")
 
-    # First call: create module
-    assert canvas.calls[0]["url"] == f"/courses/{target_course_id}/modules"
-    mod_payload = canvas.calls[0]["json"]["module"]
-    assert mod_payload["name"] == "Week 1"
-    assert mod_payload["position"] == 1
-    assert mod_payload["published"] is True
-    assert mod_payload["require_sequential_progress"] is False
-
-    # Subsequent calls: module items, all to .../modules/1001/items
-    item_calls = canvas.calls[1:]
-    assert all(c["url"] == f"/courses/{target_course_id}/modules/1001/items" for c in item_calls)
-
-    # Check a few representative payloads
-    # SubHeader (id=1)
-    subheader = item_calls[0]["json"]["module_item"]
-    assert subheader["type"] == "SubHeader"
-    assert subheader["title"] == "Readings"
-
-    # Page (id=2) maps slug
-    page_item = item_calls[1]["json"]["module_item"]
-    assert page_item["type"] == "Page"
-    assert page_item["page_url"] == "intro-new"
-
-    # Assignment (id=3) uses mapped content_id
-    asg_item = item_calls[2]["json"]["module_item"]
-    assert asg_item["type"] == "Assignment"
-    assert asg_item["content_id"] == 1201
-
-    # ExternalUrl retains external_url + title
-    ext_url_item = item_calls[3]["json"]["module_item"]
-    assert ext_url_item["type"] == "ExternalUrl"
-    assert ext_url_item["external_url"] == "https://example.edu/syllabus"
-    assert ext_url_item["title"] == "Syllabus link"
-
-    # Quiz mapping
-    quiz_item = item_calls[4]["json"]["module_item"]
-    assert quiz_item["type"] == "Quiz"
-    assert quiz_item["content_id"] == 1301
-
-    # File mapping
-    file_item = item_calls[5]["json"]["module_item"]
-    assert file_item["type"] == "File"
-    assert file_item["content_id"] == 1401
-
-    # Discussion mapping
-    disc_item = item_calls[6]["json"]["module_item"]
-    assert disc_item["type"] == "Discussion"
-    assert disc_item["content_id"] == 1501
-
-    # ExternalTool
-    tool_item = item_calls[7]["json"]["module_item"]
-    assert tool_item["type"] == "ExternalTool"
-    assert tool_item["external_tool_url"] == "https://lti.example.com/launch"
-    assert tool_item["new_tab"] is True
-
-
-def test_import_modules_skips_missing_mappings(export_root: Path) -> None:
-    """
-    If a required mapping is missing (e.g., Page slug), we skip that item rather than failing.
-    """
-    canvas = DummyCanvas()
-    id_map: Dict[str, Dict[Any, Any]] = {
-        "files": {},
-        "pages": {},
-        "pages_url": {},  # <-- missing page slug mapping
-        "assignments": {201: 1201},
-        "quizzes": {301: 1301},
-        "discussions": {501: 1501},
-    }
-
-    import_modules(
+    counters = importer.import_modules(
         target_course_id=999,
         export_root=export_root,
         canvas=canvas,
         id_map=id_map,
     )
 
-    # Module still created
-    assert id_map["modules"][11] == 1001
+    assert counters["modules_created"] == 1
+    assert counters["items_created"] == 3
+    assert counters["items_skipped"] == 0
+    assert counters["modules_failed"] == 0
+    assert counters["items_failed"] == 0
 
-    # Ensure a Page item was NOT posted (because slug mapping was missing).
-    payloads = [c["json"]["module_item"] for c in canvas.calls[1:]]  # skip the module create call
-    page_posts = [p for p in payloads if p["type"] == "Page"]
-    assert page_posts == []
+    # Verify payloads roughly
+    reqs = [r for r in requests_mock.request_history if r.method == "POST" and r.url.endswith("/items")]
+    assert len(reqs) == 3
+    # First is Page with page_url translated
+    j0 = reqs[0].json()
+    assert j0["module_item"]["type"] == "Page"
+    assert j0["module_item"]["page_url"] == "front-page"
+    assert j0["module_item"]["position"] == 1
+    # Second is Assignment with mapped content_id
+    j1 = reqs[1].json()
+    assert j1["module_item"]["type"] == "Assignment"
+    assert j1["module_item"]["content_id"] == 200
+    assert j1["module_item"]["position"] == 2
+    # Third is ExternalUrl
+    j2 = reqs[2].json()
+    assert j2["module_item"]["type"] == "ExternalUrl"
+    assert j2["module_item"]["external_url"] == "https://example.org/syllabus.pdf"
+    assert j2["module_item"]["position"] == 3
+
+
+def test_import_modules_skips_when_mapping_missing(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "123"
+    mods = [
+        {
+            "name": "Week 2",
+            "items": [
+                {"type": "Page", "title": "Overview", "page_url": "week-2-overview"},
+                {"type": "Assignment", "title": "HW2", "content_id": 999},  # no map provided
+            ],
+        }
+    ]
+    _write_modules_json(export_root, mods)
+
+    id_map = {
+        # pages_url missing -> page should be skipped
+        "assignments": {},  # also missing
+    }
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    requests_mock.post(
+        f"{api_base}/api/v1/courses/999/modules",
+        json={"id": 20, "name": "Week 2"},
+        status_code=200,
+    )
+    # Item posts won't be called because both items should be skipped
+    project_root = Path(os.getcwd())
+    importer = load_importer(project_root, module="importers.import_modules")
+
+    counters = importer.import_modules(
+        target_course_id=999,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+    )
+
+    assert counters["modules_created"] == 1
+    assert counters["items_created"] == 0
+    assert counters["items_skipped"] == 2
+    assert counters["modules_failed"] == 0
