@@ -35,6 +35,50 @@ def _coerce_int(val: Any) -> Optional[int]:
         return None
 
 
+def _find_html_file(page_dir: Path, meta: Dict[str, Any], logger) -> Optional[Path]:
+    """
+    Be generous in what we accept. Try (in order):
+      1) Metadata hints: html_path, html, body_path, content_path
+      2) Common filenames
+      3) Any *.html / *.htm in the folder (pick first sorted)
+    """
+    # 1) metadata hints
+    for key in ("html_path", "html", "body_path", "content_path"):
+        val = meta.get(key)
+        if isinstance(val, str) and val.strip():
+            p = (page_dir / val).resolve()
+            if p.exists():
+                return p
+
+    # 2) common names
+    common = [
+        "index.html",
+        "body.html",
+        "description.html",
+        "content.html",
+        "page.html",
+        "index.htm",
+    ]
+    for name in common:
+        p = page_dir / name
+        if p.exists():
+            return p
+
+    # 3) any html/htm
+    candidates = sorted(list(page_dir.glob("*.html")) + list(page_dir.glob("*.htm")))
+    if candidates:
+        return candidates[0]
+
+    # Nothing found
+    try:
+        # Light debug to help diagnose folder contents
+        listing = ", ".join(sorted([c.name for c in page_dir.glob("*")]))
+        logger.debug("no html file found under %s; contents: %s", page_dir, listing)
+    except Exception:
+        pass
+    return None
+
+
 # Warn only once per run if exported position != server position
 _POSITION_MISMATCH_WARNED = False
 
@@ -49,12 +93,12 @@ def import_pages(
     """
     Import wiki pages:
 
-      • POST /courses/:id/pages with {"wiki_page": {title, body, published[, front_page]}}
+      • POST /courses/:id/pages with title/body/published
       • If POST returns only slug + 'Location' header, GET the Location to obtain numeric id
       • Always record:
             id_map['pages_url'][old_slug] -> new_slug
             id_map['pages'][old_id]       -> new_id   (when available)
-      • If front_page: True, PUT /courses/:id/pages/:slug with {"wiki_page": {"front_page": true}}
+      • If front_page: True, PUT /courses/:id/front_page after creation
       • If exported 'position' differs from server 'position', log a single warning
     """
     logger = get_logger(course_id=target_course_id, artifact="pages")
@@ -94,27 +138,26 @@ def import_pages(
             logger.warning("skipping %s (missing page title)", meta_path)
             continue
 
-        # Resolve HTML body file (index.html or body.html)
-        html_rel = meta.get("html_path") or "index.html"
-        html_path = page_dir / html_rel
-        if not html_path.exists():
-            alt = page_dir / "body.html"
-            html_path = alt if alt.exists() else html_path
-        if not html_path.exists():
+        # Resolve HTML body file (robust)
+        html_path = _find_html_file(page_dir, meta, logger)
+        body_html: Optional[str] = None
+        if html_path:
+            body_html = _read_text_if_exists(html_path)
+
+        # Fallback to metadata body/description if no file found
+        if body_html is None:
+            body_html = meta.get("body") or meta.get("description")
+
+        if body_html is None:
             counters["skipped"] += 1
             logger.warning("missing_html title=%s dir=%s", title, page_dir)
             continue
 
-        body_html = _read_text_if_exists(html_path) or ""
-        wiki = {
+        payload = {
             "title": title,
             "body": body_html,
             "published": bool(meta.get("published", False)),
         }
-        # Ask Canvas to set front page at creation if requested
-        if bool(meta.get("front_page")):
-            wiki["front_page"] = True
-        payload = {"wiki_page": wiki}
 
         old_id = _coerce_int(meta.get("id"))
         old_slug = meta.get("url") or meta.get("slug")
@@ -174,16 +217,13 @@ def import_pages(
 
         counters["imported"] += 1
 
-        # Ensure front page is set correctly (use the page-specific endpoint, not /front_page)
-        if meta.get("front_page") and new_slug:
+        # Front page after creation
+        if meta.get("front_page"):
             try:
-                canvas.put(
-                    f"/api/v1/courses/{target_course_id}/pages/{new_slug}",
-                    json={"wiki_page": {"front_page": True}},
-                )
+                canvas.put(f"/api/v1/courses/{target_course_id}/front_page", json={"url": new_slug})
             except Exception as e:
                 counters["failed"] += 1
-                logger.error("failed-set-frontpage slug=%s: %s", new_slug, e)
+                logger.error("failed-frontpage slug=%s: %s", new_slug, e)
 
     logger.info(
         "Pages import complete. imported=%d skipped=%d failed=%d total=%d",
