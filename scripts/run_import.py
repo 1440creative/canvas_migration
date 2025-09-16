@@ -13,6 +13,12 @@ import json
 from pathlib import Path
 from typing import Dict, Any
 
+from utils.api import target_api
+if target_api is None:
+        raise SystemExit(
+            "ERROR: target_api is not configured. Set CANVAS_TARGET_URL and CANVAS_TARGET_TOKEN in your .env"
+        )
+
 
 ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "course"]
 
