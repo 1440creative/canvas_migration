@@ -1,72 +1,110 @@
 # tests/test_import_discussions.py
 import json
-import importlib.util
+import os
 from pathlib import Path
-import requests
 
-from tests.conftest import DummyCanvas
+from tests.conftest import DummyCanvas, load_importer
 
-
-def _load_discussions_module(project_root: Path):
-    mod_path = (project_root / "importers" / "import_discussions.py").resolve()
-    assert mod_path.exists(), f"Expected module at {mod_path}"
-    spec = importlib.util.spec_from_file_location("import_discussions_mod", str(mod_path))
-    mod = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader, f"Could not build spec for {mod_path}"
-    spec.loader.exec_module(mod)
-    assert hasattr(mod, "import_discussions") and callable(mod.import_discussions), \
-        "import_discussions not found or not callable"
-    return mod
 
 def test_import_discussions_basic(tmp_path, requests_mock):
+    # --- Arrange export tree
     export_root = tmp_path / "export" / "data" / "101"
-    ddir = export_root / "discussions" / "welcome-thread"
-    ddir.mkdir(parents=True)
-    (ddir / "discussion_metadata.json").write_text(json.dumps({
-        "id": 600,
-        "title": "Welcome Thread",
-        "published": True,
-        "message": "This will be overridden by HTML file"
-    }), encoding="utf-8")
-    (ddir / "description.html").write_text("<p>Welcome HTML</p>", encoding="utf-8")
+    disc_dir = export_root / "discussions" / "welcome-thread"
+    disc_dir.mkdir(parents=True)
 
+    meta = {
+        "id": 987,
+        "title": "Welcome thread",
+        # explicitly NOT an announcement
+        "is_announcement": False,
+        "published": True,
+        "html_path": "index.html",
+    }
+    (disc_dir / "discussion_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    (disc_dir / "index.html").write_text("<p>Hello class 👋</p>", encoding="utf-8")
+
+    # --- Arrange API mocks
     api_base = "https://api.example.edu"
-    requests_mock.post(f"{api_base}/api/v1/courses/222/discussion_topics",
-                       json={"id": 8800, "title": "Welcome Thread"}, status_code=200)
+    create_url = f"{api_base}/api/v1/courses/222/discussion_topics"
+
+    # POST create returns id directly
+    requests_mock.post(
+        create_url,
+        json={"id": 123, "title": "Welcome thread"},
+        status_code=200,
+    )
 
     canvas = DummyCanvas(api_base)
-    mod = _load_discussions_module(Path.cwd())
+    project_root = Path(os.getcwd())
+    importer = load_importer(project_root, module="importers.import_discussions")
+
     id_map = {}
 
-    mod.import_discussions(
+    # --- Act
+    counters = importer.import_discussions(
         target_course_id=222,
         export_root=export_root,
         canvas=canvas,
         id_map=id_map,
     )
 
-    assert id_map["discussions"] == {600: 8800}
+    # --- Assert
+    assert counters["imported"] == 1
+    assert counters["failed"] == 0
+    # id map recorded
+    assert id_map.get("discussions", {}).get(987) == 123
 
 
-def test_import_discussions_missing_title_skips(tmp_path, requests_mock):
+def test_import_discussions_location_follow(tmp_path, requests_mock):
+    # --- Arrange export tree
     export_root = tmp_path / "export" / "data" / "101"
-    ddir = export_root / "discussions" / "no-title"
-    ddir.mkdir(parents=True)
-    (ddir / "discussion_metadata.json").write_text(json.dumps({
-        "id": 601,
-        "published": True
-    }), encoding="utf-8")
+    disc_dir = export_root / "discussions" / "syllabus-qna"
+    disc_dir.mkdir(parents=True)
 
+    meta = {
+        "id": 321,
+        "title": "Syllabus Q&A",
+        "is_announcement": False,
+        "published": False,
+        # no html_path => defaults to index.html
+    }
+    (disc_dir / "discussion_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    (disc_dir / "index.html").write_text("<p>Ask anything about the syllabus.</p>", encoding="utf-8")
+
+    # --- Arrange API mocks
     api_base = "https://api.example.edu"
+    create_url = f"{api_base}/api/v1/courses/222/discussion_topics"
+    follow_url = f"{api_base}/api/v1/courses/222/discussion_topics/654"
+
+    # POST returns no id in JSON but gives Location to follow
+    requests_mock.post(
+        create_url,
+        json={"result": "ok"},
+        status_code=201,
+        headers={"Location": follow_url},
+    )
+    # GET follow returns full topic with id
+    requests_mock.get(
+        follow_url,
+        json={"id": 654, "title": "Syllabus Q&A"},
+        status_code=200,
+    )
+
     canvas = DummyCanvas(api_base)
-    mod = _load_discussions_module(Path.cwd())
+    project_root = Path(os.getcwd())
+    importer = load_importer(project_root, module="importers.import_discussions")
+
     id_map = {}
 
-    mod.import_discussions(
-        target_course_id=333,
+    # --- Act
+    counters = importer.import_discussions(
+        target_course_id=222,
         export_root=export_root,
         canvas=canvas,
         id_map=id_map,
     )
 
-    assert "discussions" not in id_map or id_map["discussions"] == {}
+    # --- Assert
+    assert counters["imported"] == 1
+    assert counters["failed"] == 0
+    assert id_map.get("discussions", {}).get(321) == 654
