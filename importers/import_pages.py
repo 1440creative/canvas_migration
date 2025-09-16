@@ -49,12 +49,12 @@ def import_pages(
     """
     Import wiki pages:
 
-      • POST /courses/:id/pages with {"wiki_page": {title, body, published}}
+      • POST /courses/:id/pages with {"wiki_page": {title, body, published[, front_page]}}
       • If POST returns only slug + 'Location' header, GET the Location to obtain numeric id
       • Always record:
             id_map['pages_url'][old_slug] -> new_slug
             id_map['pages'][old_id]       -> new_id   (when available)
-      • If front_page: True, PUT /courses/:id/front_page after creation (kept for compatibility)
+      • If front_page: True, PUT /courses/:id/pages/:slug with {"wiki_page": {"front_page": true}}
       • If exported 'position' differs from server 'position', log a single warning
     """
     logger = get_logger(course_id=target_course_id, artifact="pages")
@@ -106,12 +106,15 @@ def import_pages(
             continue
 
         body_html = _read_text_if_exists(html_path) or ""
-        # Canvas expects fields under the "wiki_page" envelope
-        payload = {"wiki_page": {
+        wiki = {
             "title": title,
             "body": body_html,
             "published": bool(meta.get("published", False)),
-        }}
+        }
+        # Ask Canvas to set front page at creation if requested
+        if bool(meta.get("front_page")):
+            wiki["front_page"] = True
+        payload = {"wiki_page": wiki}
 
         old_id = _coerce_int(meta.get("id"))
         old_slug = meta.get("url") or meta.get("slug")
@@ -171,13 +174,16 @@ def import_pages(
 
         counters["imported"] += 1
 
-        # Front page after creation (kept for compatibility with existing tests)
-        if meta.get("front_page"):
+        # Ensure front page is set correctly (use the page-specific endpoint, not /front_page)
+        if meta.get("front_page") and new_slug:
             try:
-                canvas.put(f"/api/v1/courses/{target_course_id}/front_page", json={"url": new_slug})
+                canvas.put(
+                    f"/api/v1/courses/{target_course_id}/pages/{new_slug}",
+                    json={"wiki_page": {"front_page": True}},
+                )
             except Exception as e:
                 counters["failed"] += 1
-                logger.error("failed-frontpage slug=%s: %s", new_slug, e)
+                logger.error("failed-set-frontpage slug=%s: %s", new_slug, e)
 
     logger.info(
         "Pages import complete. imported=%d skipped=%d failed=%d total=%d",
