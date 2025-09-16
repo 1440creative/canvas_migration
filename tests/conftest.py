@@ -1,100 +1,115 @@
 # tests/conftest.py
-from __future__ import annotations
-
+import json
 import importlib
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+
+import pytest
+import requests
 
 
-# --- Ensure repo root is importable (so tests can import your packages without PYTHONPATH) ---
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-
-# --- Minimal in-memory Response stub (no real HTTP) ---
+# ---------- lightweight response used by record-only calls ----------
 class DummyResponse:
-    def __init__(self, status_code: int = 200, json_data: Optional[Dict[str, Any]] = None, text: str = "ok"):
+    def __init__(self, status_code: int = 200, json_data=None, headers=None):
         self.status_code = status_code
-        self._json = {} if json_data is None else json_data
-        self.text = text
+        self._json = json_data
+        self.headers = headers or {}
+        self.text = json.dumps(json_data) if json_data is not None else ""
 
-    def json(self) -> Dict[str, Any]:
+    def json(self):
+        if self._json is None:
+            raise ValueError("No JSON on this DummyResponse")
         return self._json
 
-    def raise_for_status(self) -> None:
-        # Mirror requests.Response.raise_for_status() behavior
-        if 400 <= self.status_code:
-            import requests  # only to raise matching error type when needed
-            raise requests.HTTPError(f"{self.status_code} Error", response=self)  # type: ignore[misc]
+    def raise_for_status(self):
+        if not (200 <= self.status_code < 400):
+            raise requests.HTTPError(f"{self.status_code} error")
 
 
-# --- Pure in-memory Canvas client used by tests ---
+# ---------- the Canvas test double ----------
 class DummyCanvas:
     """
-    Minimal, network-free Canvas client for tests.
+    Dual-mode test client:
 
-    - Records every call in self.calls as dicts: {"method": "...", "endpoint": "...", ...kwargs}
-    - Returns DummyResponse(200, {"ok": True}) by default so importers don't crash
-    - Exposes api_base and api_root for compatibility with production code
-    - Provides helpers used by file import tests (begin_course_file_upload, _multipart_post)
+    - For most endpoints (get/post/put/delete), we RECORD calls and return a DummyResponse.
+      This avoids outbound HTTP for settings/blueprint tests and lets you assert on canvas.calls.
+
+    - For file uploads, importers call:
+        1) begin_course_file_upload(...) -> returns presigned upload_url (no HTTP)
+        2) _multipart_post(upload_url, ...) -> uses a real requests.Session.post so requests_mock intercepts
+
+      If the upload host returns a 302 Location to a Canvas finalize URL, the importer calls
+      self.session.get(...), which requests_mock will also intercept.
     """
-
-    def __init__(self, api_base: str = "https://canvas.example"):
+    def __init__(self, api_base: str = "https://api.test", upload_url: str = "https://uploads.test/upload"):
         base = api_base.rstrip("/")
-        self.api_base: str = base
-        self.api_root: str = base
-        self.calls: List[Dict[str, Any]] = []
+        self.api_base = base
+        self.api_root = base
+        self.upload_url = upload_url
 
-        # Optional per-endpoint stubs if a test wants specific payloads
-        # key = (METHOD, endpoint_substring)  ->  value = DummyResponse or callable(**kwargs) -> DummyResponse
-        self._stubs: Dict[tuple[str, str], Any] = {}
+        # call recording (used by many tests)
+        self.calls = []
+        self.get_calls = []
+        self.post_calls = []
+        self.put_calls = []
+        self.delete_calls = []
 
-    # --- Stubbing convenience (optional for tests) ---
-    def stub(self, method: str, endpoint_contains: str, response: Any) -> None:
-        """
-        Register a stubbed response. `response` can be:
-          - DummyResponse instance (returned as-is), or
-          - callable(**kwargs) -> DummyResponse (built at call time)
-        Matching is done via substring on the requested endpoint.
-        """
-        self._stubs[(method.upper(), endpoint_contains)] = response
+        # a real session so requests_mock sees outbound calls to upload/finalize hosts
+        self.session = requests.Session()
+        self.session.headers.update({
+            "Authorization": "Bearer TEST",
+            "Content-Type": "application/json"
+        })
 
-    def _match_stub(self, method: str, endpoint: str, **kwargs) -> Optional[DummyResponse]:
-        for (m, frag), resp in self._stubs.items():
-            if m == method.upper() and frag in endpoint:
-                if callable(resp):
-                    return resp(**kwargs)
-                return resp
-        return None
+    # ----- helpers -----
+    def _url(self, endpoint: str) -> str:
+        if not endpoint:
+            return self.api_base
+        ep = str(endpoint).strip()
+        if ep.startswith("http://") or ep.startswith("https://"):
+            return ep
+        if ep.startswith("/api/v1/"):
+            pass
+        elif ep.startswith("api/v1/"):
+            ep = "/" + ep
+        elif ep.startswith("courses/"):
+            ep = "/api/v1/" + ep
+        elif not ep.startswith("/"):
+            ep = "/" + ep
+        return self.api_base + ep
 
-    # --- Internal recorder ---
-    def _record(self, method: str, endpoint: str, **kwargs) -> DummyResponse:
-        self.calls.append({"method": method.upper(), "endpoint": endpoint, **kwargs})
+    def _record(self, method: str, endpoint: str, **kwargs):
+        call = {"method": method.upper(), "endpoint": endpoint}
+        if "json" in kwargs:
+            call["json"] = kwargs["json"]
+        self.calls.append(call)
+        if method.upper() == "GET":
+            self.get_calls.append(call)
+        elif method.upper() == "POST":
+            self.post_calls.append(call)
+        elif method.upper() == "PUT":
+            self.put_calls.append(call)
+        elif method.upper() == "DELETE":
+            self.delete_calls.append(call)
 
-        # Allow tests to inject specific payloads per endpoint
-        stubbed = self._match_stub(method, endpoint, **kwargs)
-        if stubbed is not None:
-            return stubbed
+    # ----- record-only CRUD (no network) -----
+    def get(self, endpoint: str, **kwargs):
+        self._record("GET", endpoint, **kwargs)
+        return DummyResponse(200, json_data={})
 
-        # Generic OK response
-        return DummyResponse(200, json_data={"ok": True})
+    def post(self, endpoint: str, **kwargs):
+        self._record("POST", endpoint, **kwargs)
+        return DummyResponse(200, json_data={})
 
-    # --- Public HTTP-like methods used by importers ---
-    def get(self, endpoint: str, **kwargs) -> DummyResponse:
-        return self._record("GET", self._normalize_endpoint(endpoint), **kwargs)
+    def put(self, endpoint: str, **kwargs):
+        self._record("PUT", endpoint, **kwargs)
+        return DummyResponse(200, json_data={})
 
-    def post(self, endpoint: str, **kwargs) -> DummyResponse:
-        return self._record("POST", self._normalize_endpoint(endpoint), **kwargs)
+    def delete(self, endpoint: str, **kwargs):
+        self._record("DELETE", endpoint, **kwargs)
+        return DummyResponse(200, json_data={})
 
-    def put(self, endpoint: str, **kwargs) -> DummyResponse:
-        return self._record("PUT", self._normalize_endpoint(endpoint), **kwargs)
-
-    def delete(self, endpoint: str, **kwargs) -> DummyResponse:
-        return self._record("DELETE", self._normalize_endpoint(endpoint), **kwargs)
-
-    # --- Helpers mirrored from real client semantics (without network) ---
+    # ----- file-upload flow bits -----
     def begin_course_file_upload(
         self,
         course_id: int,
@@ -102,66 +117,52 @@ class DummyCanvas:
         name: str,
         parent_folder_path: str,
         on_duplicate: str = "overwrite",
-    ) -> Dict[str, Any]:
-        """
-        Simulate Canvas' "initiate file upload" response shape enough for importer logic.
-        Tests can override via `stub("POST", "/courses/{id}/files", DummyResponse(...))` if needed.
-        """
-        endpoint = f"/api/v1/courses/{course_id}/files"
-        payload = {
-            "name": name,
-            "parent_folder_path": parent_folder_path,
-            "on_duplicate": on_duplicate,
-        }
-        # record the call so tests can assert on it
-        self._record("POST", endpoint, json=payload)
-        # minimal shape typically expected by importers
-        return {
-            "upload_url": "https://uploads.example.com/fake-s3",
-            "upload_params": {
-                "key": f"{parent_folder_path.rstrip('/')}/{name}",
-                "Content-Type": "application/octet-stream",
+    ) -> dict:
+        # Record a synthetic handshake for visibility; do NOT perform HTTP.
+        self._record(
+            "POST",
+            f"/api/v1/courses/{course_id}/files",
+            json={
+                "name": name,
+                "parent_folder_path": parent_folder_path,
                 "on_duplicate": on_duplicate,
             },
-        }
+        )
+        # Hand back the presigned upload target the tests stub with requests_mock
+        return {"upload_url": self.upload_url, "upload_params": {}}
 
-    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> DummyResponse:
-        """
-        Simulate the S3 (or Canvas) multipart POST; just record and return 201 with a plausible JSON.
-        """
-        # Record as a normal POST call so tests can inspect
-        return self._record("POST", url, data=data, files=list(files.keys()))
-
-    # --- Endpoint normalizer (keeps relative/absolute safe) ---
-    def _normalize_endpoint(self, endpoint: str) -> str:
-        if not endpoint:
-            return self.api_base
-        ep = str(endpoint).strip()
-
-        # Absolute? return as-is (we still treat it as an identifier; no network happens)
-        if ep.startswith("http://") or ep.startswith("https://"):
-            return ep
-
-        # Normalize to "/api/v1/..." prefix when obvious
-        if ep.startswith("/api/v1/"):
-            return ep
-        if ep.startswith("api/v1/"):
-            return "/" + ep
-        if ep.startswith("courses/"):
-            return "/api/v1/" + ep
-        if not ep.startswith("/"):
-            return "/" + ep
-        return ep
+    def _multipart_post(self, url: str, *, data: dict, files: dict) -> requests.Response:
+        # Use the real session so requests_mock intercepts this call.
+        headers = self.session.headers.copy()
+        headers.pop("Content-Type", None)  # let requests set multipart boundary
+        return self.session.post(url, data=data, files=files, headers=headers)
 
 
-# --- Tiny helper so tests can import the function-under-test cleanly ---
+# ---------- import helpers ----------
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+
 def load_importer(module_path: str, func_name: str):
-    """
-    Import `func_name` from the module at `module_path`.
-
-    Examples:
-      load_importer("importers.import_course_settings", "import_course_settings")
-      load_importer("importers.import_files", "import_files")
-    """
     mod = importlib.import_module(module_path)
     return getattr(mod, func_name)
+
+
+# ---------- common fixtures ----------
+@pytest.fixture
+def dummy_canvas():
+    # api_base aligns with finalize URLs in tests; upload_url with uploads host in tests
+    return DummyCanvas(api_base="https://api.test", upload_url="https://uploads.test/upload")
+
+
+@pytest.fixture
+def id_map():
+    return {"files": {}}
+
+
+@pytest.fixture
+def tmp_export(tmp_path: Path):
+    root = tmp_path / "export" / "data" / "101"
+    (root / "files").mkdir(parents=True, exist_ok=True)
+    return root

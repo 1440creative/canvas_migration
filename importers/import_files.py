@@ -19,19 +19,21 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, Protocol, Optional, Mapping
+from typing import Dict, Any, Protocol, Optional
 
 import requests
-from logging_setup import get_logger  # your project-level logger adapter
+from logging_setup import get_logger  # project-level logger adapter
 from utils.fs import file_hashes
 
-__all__ = ["import_files"]
+__all__ = ["import_files", "_manifest_path"]
 
 # ---- Manifest helpers -------------------------------------------------------
 _MANIFEST_NAME = ".uploads_manifest.json"
 
+
 def _manifest_path(export_root: Path) -> Path:
     return export_root / _MANIFEST_NAME
+
 
 def _load_manifest(export_root: Path) -> dict:
     p = _manifest_path(export_root)
@@ -41,6 +43,7 @@ def _load_manifest(export_root: Path) -> dict:
         except Exception:
             return {}
     return {}
+
 
 def _save_manifest(export_root: Path, manifest: dict) -> None:
     _manifest_path(export_root).write_text(
@@ -64,7 +67,7 @@ class CanvasLike(Protocol):
         parent_folder_path: str,
         on_duplicate: str = "overwrite",
     ) -> Dict[str, Any]: ...
-    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response: ...  
+    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response: ...
 
 
 # ---- Helpers ----------------------------------------------------------------
@@ -80,6 +83,32 @@ def _coerce_int(val: Any) -> Optional[int]:
         return None
 
 
+def _extract_new_file_id(payload: Any) -> Optional[int]:
+    """
+    Try to pull a file id out of various Canvas upload response shapes.
+    Accepts ints or numeric strings, and nested 'attachment' objects.
+    """
+    if not isinstance(payload, dict):
+        return None
+
+    # direct id
+    if "id" in payload:
+        try:
+            return int(payload["id"])
+        except (TypeError, ValueError):
+            pass
+
+    # nested attachment.id
+    att = payload.get("attachment")
+    if isinstance(att, dict) and "id" in att:
+        try:
+            return int(att["id"])
+        except (TypeError, ValueError):
+            pass
+
+    return None
+
+
 # ---- Public entrypoint ------------------------------------------------------
 def import_files(
     *,
@@ -88,12 +117,11 @@ def import_files(
     canvas: CanvasLike,
     id_map: Dict[str, Dict[int, int]],
     on_duplicate: str = "overwrite",  # or "rename"
-    verbosity: int = 1, # still available for CLI but not passed to get_logger()
+    verbosity: int = 1,  # kept for CLI compatibility; logging level configured elsewhere
 ) -> None:
     """
     Upload files from export_root/files into the Canvas course and update id_map["files"].
     """
-    # Just bind course_id and artifact — verbosity is handled globally by setup_logging()
     logger = get_logger(course_id=target_course_id, artifact="files")
 
     files_dir = export_root / "files"
@@ -103,7 +131,6 @@ def import_files(
 
     logger.info("Starting file import from %s", files_dir)
 
-
     file_map = id_map.setdefault("files", {})
     imported = 0
     skipped = 0
@@ -111,7 +138,7 @@ def import_files(
 
     # Load uploads manifest once for the whole run
     manifest: dict = _load_manifest(export_root)
-    
+
     # Find all sidecar metadata files produced by your exporter
     for meta_file in files_dir.rglob("*.metadata.json"):
         try:
@@ -132,7 +159,11 @@ def import_files(
         exported_file = meta_file.parent / file_name
         if not exported_file.exists():
             failed += 1
-            logger.error("Exported file missing for metadata %s (expected %s)", meta_file, exported_file)
+            logger.error(
+                "Exported file missing for metadata %s (expected %s)",
+                meta_file,
+                exported_file,
+            )
             continue
 
         rel_path = _safe_relpath(exported_file, files_dir)
@@ -142,7 +173,7 @@ def import_files(
         if not folder_path:
             parent_rel = Path(rel_path).parent.as_posix()
             folder_path = parent_rel if parent_rel not in ("", ".") else "/"
-            
+
         # --- Check manifest for same blob (sha256) and skip if identical ---
         try:
             local_sha = file_hashes(exported_file)["sha256"]
@@ -150,20 +181,27 @@ def import_files(
             local_sha = None
             logger.debug("Could not compute sha256 for %s: %s", rel_path, e)
 
-        manifest_key = rel_path  # files/<subdirs>/<name>
+        manifest_key = rel_path  # 'subdir/name.ext'
         if local_sha:
             prev = manifest.get(manifest_key)
             if prev and isinstance(prev, dict) and prev.get("sha256") == local_sha:
                 new_id_prev = prev.get("new_id")
                 if old_id is not None and isinstance(new_id_prev, int):
                     file_map[old_id] = new_id_prev
-                skipped = 1
-                logger.info("Skipped upload (same sha256): %s → existing_id=%s", rel_path, new_id_prev)
+                skipped += 1
+                logger.info(
+                    "Skipped upload (same sha256): %s → existing_id=%s",
+                    rel_path,
+                    new_id_prev,
+                )
                 continue
-            
+
         logger.debug(
             "Processing file: rel=%s old_id=%s folder=%s size=%s bytes",
-            rel_path, old_id, folder_path, exported_file.stat().st_size
+            rel_path,
+            old_id,
+            folder_path,
+            exported_file.stat().st_size,
         )
 
         try:
@@ -178,22 +216,27 @@ def import_files(
             file_map[old_id] = int(new_id)
             imported += 1
             logger.info("Uploaded %s → new_id=%s", rel_path, new_id)
-                        # Update manifest with the new sha and id
+
+            # Update manifest with the new sha and id
             if local_sha:
                 manifest[manifest_key] = {"sha256": local_sha, "new_id": int(new_id)}
-                
+
         except Exception as e:
             failed += 1
             logger.exception("Failed to upload %s: %s", rel_path, e)
+
     # Persist manifest at the end (best-effort)
     try:
         _save_manifest(export_root, manifest)
     except Exception as e:
         logger.warning("Could not save uploads manifest: %s", e)
-        
+
     logger.info(
         "File import complete. imported=%d skipped=%d failed=%d total=%d",
-        imported, skipped, failed, imported + skipped + failed
+        imported,
+        skipped,
+        failed,
+        imported + skipped + failed,
     )
 
 
@@ -242,7 +285,7 @@ def _upload_file_via_canvas_api(
         finalize = canvas.session.get(finalize_url)
         finalize.raise_for_status()
         try:
-            payload = finalize.json()
+            payload: Any = finalize.json()
         except ValueError:
             payload = {}
     else:
@@ -253,10 +296,9 @@ def _upload_file_via_canvas_api(
             payload = {}
 
     # Canvas may return the attachment directly or nested under "attachment"
-    if "id" in payload and isinstance(payload["id"], int):
-        return payload["id"]
-    if isinstance(payload.get("attachment"), dict) and "id" in payload["attachment"]:
-        return int(payload["attachment"]["id"])
+    new_id = _extract_new_file_id(payload)
+    if new_id is not None:
+        return new_id
 
     logger.debug("Unexpected upload response payload: %s", payload)
     raise RuntimeError("Canvas upload did not return a file id")

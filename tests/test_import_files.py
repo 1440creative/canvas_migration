@@ -1,95 +1,95 @@
+# tests/test_import_files.py
 import json
-import os
 from pathlib import Path
-import importlib.util
-
 import pytest
-import requests
 
+from importers.import_files import import_files, _manifest_path
 from tests.conftest import DummyCanvas
 
+# ---------- Local fixtures (self-contained) ----------
+@pytest.fixture
+def tmp_export(tmp_path):
+    root = tmp_path / "export" / "data" / "101"
+    (root / "files").mkdir(parents=True, exist_ok=True)
+    return root
 
+@pytest.fixture
+def id_map():
+    return {}
 
-def load_importer(project_root: Path):
-    mod_path = (project_root /"importers"/ "import_files.py").resolve()
-    assert mod_path.exists(), f"Expected module at {mod_path}, but it does not exist."
+@pytest.fixture
+def dummy_canvas(requests_mock):
+    # Use the same base across tests
+    api_base = "https://api.test"
+    c = DummyCanvas(api_base)
 
-    spec = importlib.util.spec_from_file_location("import_files_mod", str(mod_path))
-    assert spec and spec.loader, f"Could not build spec for {mod_path}"
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    # Strong assertion with helpful context
-    exported = dir(mod)
-    assert hasattr(mod, "import_files"), (
-        f"'import_files' not found in {mod_path}.\n"
-        f"Exported names:\n{exported}"
-    )
-    return mod
-
-
-
-
-def test_import_files_upload_flow(tmp_path, requests_mock):
-    # --- Arrange: build a fake export tree
-    export_root = tmp_path / "export" / "data" / "101"
-    files_dir = export_root / "files" / "foo"
-    files_dir.mkdir(parents=True)
-
-    # Create a file + matching metadata
-    file_path = files_dir / "hello.txt"
-    file_path.write_text("hello world", encoding="utf-8")
-    meta = {
-        "id": 111,
-        "file_name": "hello.txt",
-        "folder_path": "foo",  # explicit; importer also supports deriving from layout
-    }
-    (files_dir / "hello.txt.metadata.json").write_text(json.dumps(meta), encoding="utf-8")
-
-    # --- Arrange: mock Canvas API + upload host endpoints
-    api_base = "https://api.example.edu"  # pretend Canvas API host
-    upload_host = "https://upload.example.com"  # the presigned upload host
-
-    handshake_url = f"{api_base}/api/v1/courses/222/files"
-    upload_url = f"{upload_host}/upload"
-    finalize_url = f"{api_base}/finalize/abc123"
-
-    # Step 1: POST handshake to API returns upload_url + upload_params
+    # Handshake stub: Canvas init upload returns uploads host
     requests_mock.post(
-        handshake_url,
-        json={"upload_url": upload_url, "upload_params": {"key": "value"}},
+        f"{api_base}/api/v1/courses/101/files",
+        json={"upload_url": "https://uploads.test/upload", "upload_params": {}},
         status_code=200,
     )
+    return c
 
-    # Step 2: POST to upload_url returns a redirect to finalize
-    requests_mock.post(
-        upload_url,
-        status_code=302,
-        headers={"Location": finalize_url},
-    )
+# ---------- Helpers ----------
+def _write_exported_file(tmp_export, rel_path: str, *, file_id: int, file_name: str, folder_path: str | None = None, content=b"hi"):
+    p = tmp_export / "files" / rel_path
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
+    meta = {
+        "id": file_id,
+        "file_name": file_name,
+    }
+    if folder_path is not None:
+        meta["folder_path"] = folder_path
+    (p.parent / f"{file_name}.metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    return p
 
-    # Step 3: GET finalize returns the new file object with an id
-    requests_mock.get(finalize_url, json={"id": 123}, status_code=200)
+# ---------- Tests ----------
+def test_upload_basic_updates_id_map(tmp_export, id_map, requests_mock, dummy_canvas):
+    _ = _write_exported_file(tmp_export, "sub/inner/a.txt", file_id=42, file_name="a.txt", folder_path=None, content=b"hello")
 
-    # Build our dummy canvas client (uses a real Session so requests_mock intercepts)
-    canvas = DummyCanvas(api_base)
+    # Upload host returns final JSON with the file id
+    requests_mock.post("https://uploads.test/upload", json={"id": 9001}, status_code=200)
 
-    # Dynamically load the importer module from path
-    project_root = Path(os.getcwd())  # adjust if your tests run from repo root
-    importer = load_importer(project_root)
-
-    id_map = {}
-
-    # --- Act
-    importer.import_files(
-        target_course_id=222,
-        export_root=export_root,
-        canvas=canvas,
+    import_files(
+        target_course_id=101,
+        export_root=tmp_export,
+        canvas=dummy_canvas,
         id_map=id_map,
         on_duplicate="overwrite",
-        verbosity=0,
     )
 
-    # --- Assert
-    assert "files" in id_map
-    assert id_map["files"] == {111: 123}
+    assert id_map["files"][42] == 9001
+    man = json.loads(_manifest_path(tmp_export).read_text(encoding="utf-8"))
+    assert "sub/inner/a.txt" in man and man["sub/inner/a.txt"]["new_id"] == 9001
+
+def test_upload_handles_redirect_finalize(tmp_export, id_map, requests_mock, dummy_canvas):
+    _ = _write_exported_file(tmp_export, "only/a.txt", file_id=7, file_name="a.txt", folder_path=None, content=b"abc")
+
+    # Upload host returns a 302 to Canvas finalize URL
+    requests_mock.post(
+        "https://uploads.test/upload",
+        status_code=302,
+        headers={"Location": "https://api.test/api/v1/files/finalize/123"},
+    )
+    # Finalize GET returns nested attachment payload
+    requests_mock.get("https://api.test/api/v1/files/finalize/123", json={"attachment": {"id": 777}}, status_code=200)
+
+    import_files(target_course_id=101, export_root=tmp_export, canvas=dummy_canvas, id_map=id_map)
+    assert id_map["files"][7] == 777
+
+def test_manifest_skip_counts_as_skipped(tmp_export, id_map, requests_mock, dummy_canvas, caplog):
+    _ = _write_exported_file(tmp_export, "dup/a.txt", file_id=99, file_name="a.txt", content=b"xyz")
+    requests_mock.post("https://uploads.test/upload", json={"id": 5000}, status_code=200)
+
+    # First run → uploads the file
+    import_files(target_course_id=101, export_root=tmp_export, canvas=dummy_canvas, id_map=id_map)
+
+    # Second run → no HTTP expected; skipped via manifest
+    requests_mock.reset_mock()
+    caplog.set_level("INFO")
+    import_files(target_course_id=101, export_root=tmp_export, canvas=dummy_canvas, id_map=id_map)
+
+    msgs = [r.getMessage().lower() for r in caplog.records]
+    assert any("skipped upload (same sha256)" in m for m in msgs), msgs
