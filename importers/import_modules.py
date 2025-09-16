@@ -1,209 +1,227 @@
-#import/import_modules.py
+# importers/import_modules.py
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Optional, Protocol, Tuple
 
+import requests
 from logging_setup import get_logger
-from utils.api import CanvasAPI
+
+__all__ = ["import_modules"]
 
 
-def _sorted_modules(modules: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Deterministic order: (position, id)."""
-    return sorted(
-        modules,
-        key=lambda m: (
-            int(m.get("position", 10_000_000)),
-            int(m.get("id", 0)),
-        ),
-    )
+class CanvasLike(Protocol):
+    session: requests.Session
+    api_root: str
+    def get(self, endpoint: str, **kwargs) -> requests.Response: ...
+    def post(self, endpoint: str, **kwargs) -> requests.Response: ...
+    def put(self, endpoint: str, **kwargs) -> requests.Response: ...
 
 
-def _sorted_items(items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Deterministic order: (position, title, id)."""
-    return sorted(
-        items,
-        key=lambda i: (
-            int(i.get("position", 10_000_000)),
-            str(i.get("title", "")),
-            int(i.get("id", 0)),
-        ),
-    )
+def _read_json(path: Path) -> Any:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
-def _module_payload(meta: Dict[str, Any]) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {
-        "module": {
-            "name": meta.get("name", "Untitled Module"),
-            "position": meta.get("position"),
-            "published": bool(meta.get("published", False)),
-            "require_sequential_progress": bool(
-                meta.get("require_sequential_progress", False)
-            ),
-        }
-    }
-    # Optional timestamp field
-    if meta.get("unlock_at"):
-        payload["module"]["unlock_at"] = meta["unlock_at"]
-    return payload
+def _coerce_int(val: Any) -> Optional[int]:
+    try:
+        return int(val) if val is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
-def _build_item_payload(
-    item: Dict[str, Any],
-    id_map: Dict[str, Dict[Any, Any]],
-) -> Tuple[Dict[str, Any] | None, str | None]:
+def _follow_location_for_id(canvas: CanvasLike, resp: requests.Response, key: str = "id") -> Optional[int]:
+    if "Location" not in resp.headers:
+        return None
+    try:
+        r2 = canvas.session.get(resp.headers["Location"])
+        r2.raise_for_status()
+        j = r2.json()
+        return _coerce_int(j.get(key))
+    except Exception:
+        return None
+
+
+def _build_item_payload(item: Dict[str, Any], id_map: Dict[str, Dict[Any, Any]]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
-    Return (payload, warn_msg). If a required mapping is missing,
-    returns (None, warning_string).
+    Returns (payload, skip_reason)
+    Maps exported item to Canvas module_item payload. If mapping is missing, returns (None, reason).
     """
-    t = item.get("type")
+    t = (item.get("type") or "").strip()
     title = item.get("title")
-    base = {
-        "type": t,
-        # Canvas will position sequentially if omitted, but including
-        # position helps tests assert determinism.
-        "position": item.get("position"),
-        "indent": item.get("indent", 0),
-        "published": bool(item.get("published", True)),
-    }
+    indent = item.get("indent") or 0
+    published = bool(item.get("published", False))
 
-    # Common helper to return payload
-    def ok(extra: Dict[str, Any]) -> Tuple[Dict[str, Any], None]:
-        p = {"module_item": {**base, **extra}}
-        # Title is ignored for some types but is harmless and useful for tests
-        if title and "title" not in p["module_item"]:
-            p["module_item"]["title"] = title
-        return p, None
+    payload: Dict[str, Any] = {"module_item": {"type": None}}  # fill below
+    mi = payload["module_item"]
 
-    # Type-specific handling
+    def mapped_id(kind: str, old: Any) -> Optional[int]:
+        old_i = _coerce_int(old)
+        return id_map.get(kind, {}).get(old_i) if old_i is not None else None
+
     if t == "Page":
-        old_slug = item.get("page_url") or item.get("url") or item.get("page_slug")
+        # Prefer explicit page_url in export; otherwise map by old slug or id
+        old_slug = item.get("page_url") or item.get("url") or item.get("slug")
         new_slug = None
-        if old_slug is not None:
-            new_slug = id_map.get("pages_url", {}).get(old_slug)
+        if old_slug:
+            new_slug = id_map.get("pages_url", {}).get(str(old_slug))
+        if not new_slug and item.get("content_id") is not None:
+            # We only have new numeric id; Canvas needs page_url,
+            # so without slug mapping we can't safely create this item.
+            return None, "missing pages_url mapping for Page"
         if not new_slug:
-            return None, f"missing pages_url mapping for page slug '{old_slug}'"
-        return ok({"page_url": new_slug})
+            return None, "no page_url available for Page"
+        mi.update({"type": "Page", "page_url": new_slug})
+        if title:
+            mi["title"] = title
 
-    if t == "Assignment":
-        old_id = item.get("content_id") or item.get("assignment_id") or item.get("id")
-        new_id = id_map.get("assignments", {}).get(old_id)
+    elif t in ("Assignment", "Discussion", "Quiz", "File"):
+        kind_key = {
+            "Assignment": "assignments",
+            "Discussion": "discussions",
+            "Quiz": "quizzes",
+            "File": "files",
+        }[t]
+        old_id = item.get("content_id") or item.get("id")  # exporter may use either
+        new_id = mapped_id(kind_key, old_id)
         if new_id is None:
-            return None, f"missing assignments mapping for id {old_id}"
-        return ok({"content_id": new_id})
+            return None, f"missing id_map for {t} ({old_id})"
+        mi.update({"type": t, "content_id": new_id})
+        if title:
+            mi["title"] = title
 
-    if t == "Discussion":
-        old_id = item.get("content_id") or item.get("discussion_id") or item.get("id")
-        new_id = id_map.get("discussions", {}).get(old_id)
-        if new_id is None:
-            return None, f"missing discussions mapping for id {old_id}"
-        return ok({"content_id": new_id})
-
-    if t == "Quiz":
-        old_id = item.get("content_id") or item.get("quiz_id") or item.get("id")
-        new_id = id_map.get("quizzes", {}).get(old_id)
-        if new_id is None:
-            return None, f"missing quizzes mapping for id {old_id}"
-        return ok({"content_id": new_id})
-
-    if t == "File":
-        old_id = item.get("content_id") or item.get("file_id") or item.get("id")
-        new_id = id_map.get("files", {}).get(old_id)
-        if new_id is None:
-            return None, f"missing files mapping for id {old_id}"
-        return ok({"content_id": new_id})
-
-    if t == "ExternalUrl":
+    elif t in ("ExternalUrl", "ExternalURL"):
         url = item.get("external_url") or item.get("url")
         if not url:
-            return None, "ExternalUrl item missing 'external_url'"
-        new_tab = item.get("new_tab")
-        extra = {"external_url": url}
-        if isinstance(new_tab, bool):
-            extra["new_tab"] = new_tab
-        # Title is meaningful here; ensure present
+            return None, "ExternalUrl missing url"
+        mi.update({"type": "ExternalUrl", "external_url": url})
         if title:
-            extra["title"] = title
-        return ok(extra)
+            mi["title"] = title
+        if item.get("new_tab") is not None:
+            mi["new_tab"] = bool(item["new_tab"])
 
-    if t == "ExternalTool":
-        url = item.get("external_tool_url") or item.get("url")
+    elif t in ("ExternalTool", "Lti"):
+        url = item.get("external_url") or item.get("url")
         if not url:
-            return None, "ExternalTool item missing 'external_tool_url'"
-        new_tab = item.get("new_tab")
-        extra = {"external_tool_url": url}
-        if isinstance(new_tab, bool):
-            extra["new_tab"] = new_tab
+            return None, "ExternalTool missing url"
+        mi.update({
+            "type": "ExternalTool",
+            "external_tool_tag_attributes": {"url": url, "new_tab": bool(item.get("new_tab", False))}
+        })
         if title:
-            extra["title"] = title
-        return ok(extra)
+            mi["title"] = title
 
-    if t == "SubHeader":
-        # Canvas expects just title/position/indent/published for SubHeader
-        return ok({"title": title or "—"})
+    elif t in ("SubHeader", "Header"):
+        mi.update({"type": "SubHeader", "title": title or "—"})
 
-    # Unknown type — skip with warning
-    return None, f"unknown module item type '{t}'"
+    else:
+        return None, f"unsupported type '{t}'"
+
+    # Common attributes
+    mi["indent"] = indent
+    mi["published"] = published
+    return payload, None
 
 
 def import_modules(
+    *,
     target_course_id: int,
     export_root: Path,
-    canvas: CanvasAPI,
+    canvas: CanvasLike,
     id_map: Dict[str, Dict[Any, Any]],
-) -> None:
+) -> Dict[str, int]:
     """
-    Import Modules for a target course using exported metadata and existing ID maps.
+    Import course modules and their items using modules.json produced by the exporter.
 
-    Assumptions:
-    - Export layout: export/data/{source_course_id}/modules/modules.json
-    - id_map contains: files, pages_url, assignments, quizzes, discussions (and we fill modules)
+    - Creates each module: POST /courses/:id/modules { module: { name, published } }
+    - Creates items in order with explicit positions: POST /courses/:id/modules/:module_id/items { module_item: {..., position} }
+    - Resolves cross-refs via id_map:
+        pages_url (old_slug -> new_slug), assignments, discussions, quizzes, files (old_id -> new_id)
+    - Skips items whose mapping isn't available (logs a warning), continues with others.
     """
-    logger = get_logger(course_id=target_course_id, artifact="modules")
+    log = get_logger(course_id=target_course_id, artifact="modules")
+    counters = {
+        "modules_created": 0,
+        "modules_failed": 0,
+        "items_created": 0,
+        "items_skipped": 0,
+        "items_failed": 0,
+        "total_modules": 0,
+    }
 
     modules_path = export_root / "modules" / "modules.json"
     if not modules_path.exists():
-        logger.warning("No modules.json found at %s — skipping modules import", modules_path)
-        return
+        log.info("no modules.json found at %s", modules_path)
+        return counters
 
-    import json
-    modules_data = json.loads(modules_path.read_text())
-    modules = _sorted_modules(modules_data)
-    logger.info("Importing %d modules from %s", len(modules), modules_path)
+    try:
+        modules_data = _read_json(modules_path) or []
+    except Exception as e:
+        log.exception("failed to read %s: %s", modules_path, e)
+        return counters
 
-    # Ensure id_map key
-    id_map.setdefault("modules", {})
+    if not isinstance(modules_data, list):
+        log.error("modules.json is not a list")
+        return counters
 
-    # Create each module
-    for m in modules:
-        old_module_id = m.get("id")
-        payload = _module_payload(m)
-        logger.debug("Creating module %s (old_id=%s) with payload=%s", m.get("name"), old_module_id, payload)
+    # Safety limiter for quick live tests
+    limit = _coerce_int(os.getenv("IMPORT_MODULES_LIMIT")) or None
+    if limit:
+        log.info("IMPORT_MODULES_LIMIT=%s active", limit)
 
-        resp = canvas.post_json(f"/courses/{target_course_id}/modules", payload=payload)
-        new_module_id = resp.get("id")
-        if new_module_id is None:
-            logger.warning("Canvas did not return a module id for old_id=%s; response=%s", old_module_id, resp)
-            # Skip item creation if module create failed
+    for idx, m in enumerate(modules_data, start=1):
+        counters["total_modules"] += 1
+        if limit and counters["modules_created"] >= limit:
+            log.info("IMPORT_MODULES_LIMIT reached; stopping early")
+            break
+
+        name = m.get("name") or f"Module {idx}"
+        published = bool(m.get("published", False))
+
+        payload = {"module": {"name": name, "published": published}}
+        log.debug("create module name=%r", name)
+
+        try:
+            resp = canvas.post(f"/api/v1/courses/{target_course_id}/modules", json=payload)
+            data = {}
+            try:
+                data = resp.json()
+            except ValueError:
+                pass
+            module_id = _coerce_int(data.get("id")) or _follow_location_for_id(canvas, resp, key="id")
+            if not module_id:
+                counters["modules_failed"] += 1
+                log.error("failed to create module (no id) name=%r", name)
+                continue
+        except Exception as e:
+            counters["modules_failed"] += 1
+            log.exception("failed-create module name=%r: %s", name, e)
             continue
 
-        id_map["modules"][old_module_id] = new_module_id
-        logger.info("Created module '%s' old_id=%s → new_id=%s", m.get("name"), old_module_id, new_module_id)
+        counters["modules_created"] += 1
 
-        # Create items
-        items = _sorted_items(m.get("items", []))
-        for it in items:
-            item_payload, warn = _build_item_payload(it, id_map)
-            if warn:
-                logger.warning("Skipping item in module old_id=%s: %s; item=%s", old_module_id, warn, it)
+        # Items
+        items = m.get("items") or []
+        for pos, item in enumerate(items, start=1):
+            payload_item, reason = _build_item_payload(item, id_map)
+            if payload_item is None:
+                counters["items_skipped"] += 1
+                log.warning("skip item in module=%r reason=%s item=%s", name, reason, item.get("title"))
                 continue
+            # keep order by passing position
+            payload_item["module_item"]["position"] = pos
+            try:
+                canvas.post(f"/api/v1/courses/{target_course_id}/modules/{module_id}/items", json=payload_item)
+                counters["items_created"] += 1
+            except Exception as e:
+                counters["items_failed"] += 1
+                log.exception("failed-create item module=%r title=%r: %s", name, item.get("title"), e)
 
-            logger.debug(
-                "Adding item to module new_id=%s: payload=%s", new_module_id, item_payload
-            )
-            canvas.post_json(
-                f"/courses/{target_course_id}/modules/{new_module_id}/items",
-                json=item_payload,
-            )
-
-    logger.info("Modules import complete")
+    log.info(
+        "Modules import complete. modules_created=%d items_created=%d items_skipped=%d items_failed=%d modules_failed=%d total_modules=%d",
+        counters["modules_created"], counters["items_created"], counters["items_skipped"],
+        counters["items_failed"], counters["modules_failed"], counters["total_modules"]
+    )
+    return counters

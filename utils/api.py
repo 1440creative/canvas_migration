@@ -133,24 +133,6 @@ class CanvasAPI:
             url = self._next_link(r.headers)
  
         return results
-
-    def _next_link(self, headers: Dict[str, Any]) -> Optional[str]:
-        """
-        Extract the 'next' URL from an RFC5988 Link header.
-        Accepts rel=next and rel="next". Returns None if not present.
-        """
-        link_hdr = headers.get("Link") or headers.get("link")
-        if not link_hdr:
-            return None
-        for raw in link_hdr.split(","):
-            parts = [p.strip() for p in raw.split(";")]
-            if not parts or not (parts[0].startswith("<") and ">" in parts[0]):
-                continue
-            url_part = parts[0]
-            rel_parts = [p.lower() for p in parts[1:]]
-            if any(r == "rel=next" or r == 'rel="next"' for r in rel_parts):
-                return url_part[url_part.find("<") + 1 : url_part.find(">")]
-        return None
     
     def post(self, endpoint: str, *, json: Optional[Dict[str, Any]] = None,
              data: Optional[Dict[str, Any]] = None, files=None, params=None) -> requests.Response:
@@ -171,17 +153,6 @@ class CanvasAPI:
         """Raw DELETE; returns Response."""
         url = self._full_url(endpoint)
         return self._request("DELETE", url, params=params)
-    
-    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
-        """
-        Perform a multipart/form-data POST (used for Canvas file uploads).
-        Strips the default Content-Type so requests can set it correctly.
-        """
-        headers = self.session.headers.copy()
-        headers.pop("Content-Type", None) # let requests set multipart boundary
-        resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
-        resp.raise_for_status()
-        return resp
 
     def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -212,6 +183,60 @@ class CanvasAPI:
         # Use JSON body to match session default header
         return self.post_json(f"/api/v1/courses/{course_id}/files", payload=payload)
  
+
+    def _next_link(self, headers: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract the 'next' URL from an RFC5988 Link header.
+        Accepts rel=next and rel="next". Returns None if not present.
+        """
+        link_hdr = headers.get("Link") or headers.get("link")
+        if not link_hdr:
+            return None
+        for raw in link_hdr.split(","):
+            parts = [p.strip() for p in raw.split(";")]
+            if not parts or not (parts[0].startswith("<") and ">" in parts[0]):
+                continue
+            url_part = parts[0]
+            rel_parts = [p.lower() for p in parts[1:]]
+            if any(r == "rel=next" or r == 'rel="next"' for r in rel_parts):
+                return url_part[url_part.find("<") + 1 : url_part.find(">")]
+        return None
+    
+    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
+        """
+        Perform a multipart/form-data POST (used for Canvas file uploads).
+        Strips the default Content-Type so requests can set it correctly.
+        """
+        headers = self.session.headers.copy()
+        headers.pop("Content-Type", None) # let requests set multipart boundary
+        resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp
+
+    @staticmethod
+    def _json_or_empty(resp: requests.Response) -> dict:
+        """
+        Return parsed JSON if the response looks like JSON; otherwise {}.
+        Safely handles 204, empty bodies, and malformed JSON.
+        """
+        if resp.status_code == 204 or not resp.content:
+            return {}
+        ctype = resp.headers.get("Content-Type", "")
+        if "json" in ctype.lower():
+            try:
+                return resp.json()
+            except ValueError:
+                return {}
+        return {}
+    
+    def _json_from_location(self, resp: requests.Response) -> dict:
+        loc = resp.headers.get("Location")
+        if not loc:
+            return {}
+        r2 = self._request("GET", loc)
+        return self._json_or_empty(r2)
+    
+    
 
 # Instantiate API clients (source/on-prem and target/cloud) only if fully configured
 # load_dotenv()  # read .env once

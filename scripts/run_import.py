@@ -10,18 +10,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Dict, Any
 
-# ensure repo root is importable
-from pathlib import Path
-import sys
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# --- Ensure repo root is importable without needing PYTHONPATH=. ---
+THIS_FILE = Path(__file__).resolve()
+REPO_ROOT = THIS_FILE.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
-ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "course"]
+ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "announcements", "modules", "course"]
 
 
 def _scan_export(export_root: Path) -> Dict[str, int]:
@@ -135,13 +135,19 @@ def main() -> int:
     log = get_logger(artifact="runner", course_id=args.target_course_id)
     log.info("Starting import pipeline steps=%s export_root=%s", args.steps, args.export_root)
 
+    # Import the API client only now, after sys.path injection and dotenv load
     from utils.api import target_api  # type: ignore
+    if target_api is None:
+        log.error("target_api is not configured. Set CANVAS_TARGET_URL and CANVAS_TARGET_TOKEN in your .env")
+        return 2
 
+    # Import step implementations lazily
     from importers.import_pages import import_pages
     from importers.import_assignments import import_assignments
     from importers.import_quizzes import import_quizzes
     from importers.import_files import import_files
     from importers.import_discussions import import_discussions
+    from importers.import_announcements import import_announcements
     from importers.import_modules import import_modules
     from importers.import_course_settings import import_course_settings
 
@@ -184,6 +190,13 @@ def main() -> int:
                                    export_root=args.export_root,
                                    canvas=target_api,
                                    id_map=id_map)
+                save_id_map(id_map_path, id_map)
+                
+            elif step == "announcements":
+                import_announcements(target_course_id=args.target_course_id,
+                                    export_root=args.export_root,
+                                    canvas=target_api,
+                                    id_map=id_map)
                 save_id_map(id_map_path, id_map)
 
             elif step == "modules":

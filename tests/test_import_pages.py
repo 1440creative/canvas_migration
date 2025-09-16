@@ -1,131 +1,131 @@
-# tests/test_import_pages.py
 import json
-import importlib.util
+import os
 from pathlib import Path
+import importlib.util
+
+import pytest
 import requests
 
+from tests.conftest import DummyCanvas
 
-# ---- Loader (load import/import_pages.py by path since "import" is a keyword dir)
-def _load_pages_module(project_root: Path):
-    mod_path = (project_root /"importers"/ "import_pages.py").resolve()
-    assert mod_path.exists(), f"Expected module at {mod_path}"
+
+def load_importer(project_root: Path):
+    mod_path = (project_root / "importers" / "import_pages.py").resolve()
+    assert mod_path.exists(), f"Expected module at {mod_path}, but it does not exist."
+
     spec = importlib.util.spec_from_file_location("import_pages_mod", str(mod_path))
-    mod = importlib.util.module_from_spec(spec)
     assert spec and spec.loader, f"Could not build spec for {mod_path}"
+    mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    assert hasattr(mod, "import_pages") and callable(mod.import_pages), \
-        "import_pages not found or not callable"
+
+    exported = dir(mod)
+    assert hasattr(mod, "import_pages"), (
+        f"'import_pages' not found in {mod_path}.\n"
+        f"Exported names:\n{exported}"
+    )
     return mod
 
 
-# ---- Minimal Canvas-like wrapper that plays well with requests_mock
-class DummyCanvas:
-    def __init__(self, api_base: str):
-        self.api_root = api_base.rstrip("/") + "/"
-        self.session = requests.Session()
-
-    def _full(self, ep: str) -> str:
-        ep = (ep or "").strip()
-        if ep.startswith("/api/v1"):
-            ep = ep[len("/api/v1"):]
-        return self.api_root + "api/v1/" + ep.lstrip("/")
-
-    def post(self, endpoint: str, **kwargs):
-        return self.session.post(self._full(endpoint), **kwargs)
-
-    def put(self, endpoint: str, **kwargs):
-        return self.session.put(self._full(endpoint), **kwargs)
-
-    def post_json(self, endpoint: str, *, payload: dict) -> dict:
-        r = self.post(endpoint, json=payload)
-        r.raise_for_status()
-        return r.json()
-
-
-def test_import_pages_happy_path(tmp_path, requests_mock):
-    """
-    Creates a page and marks it as front page.
-    Canvas returns both url and page_id; we expect both id and slug maps to be recorded.
-    """
+def test_import_pages_basic(tmp_path, requests_mock):
+    # --- Arrange export tree
     export_root = tmp_path / "export" / "data" / "101"
-    page_dir = export_root / "pages" / "welcome"
+    page_dir = export_root / "pages" / "welcome-old"
     page_dir.mkdir(parents=True)
-    (page_dir / "index.html").write_text("<h1>Hello</h1>", encoding="utf-8")
-    (page_dir / "page_metadata.json").write_text(json.dumps({
-        "id": 42,
-        "title": "Welcome",
-        "url": "welcome-old",
-        "published": True,
-        "front_page": True
-    }), encoding="utf-8")
 
-    api_base = "https://api.example.edu"
-    # POST create page
+    meta = {
+        "id": 987,
+        "url": "welcome-old",
+        "title": "Welcome",
+        "published": True,
+        "position": 1,
+        "front_page": False,
+        "html_path": "index.html",
+    }
+    (page_dir / "page_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    (page_dir / "index.html").write_text("<h2>Hi</h2><p>Welcome!</p>", encoding="utf-8")
+
+    # --- Arrange API mocks
+    api_base = "https://api.example.edu"  # pretend Canvas API host
+    create_url = f"{api_base}/api/v1/courses/222/pages"
+
+    # POST create returns slug + id directly
     requests_mock.post(
-        f"{api_base}/api/v1/courses/222/pages",
-        json={"url": "welcome", "page_id": 314},
-        status_code=200,
-    )
-    # PUT mark front page
-    requests_mock.put(
-        f"{api_base}/api/v1/courses/222/pages/welcome",
-        json={"url": "welcome", "page_id": 314, "front_page": True},
+        create_url,
+        json={"url": "welcome", "id": 123, "position": 3},
         status_code=200,
     )
 
     canvas = DummyCanvas(api_base)
-    mod = _load_pages_module(Path.cwd())
+    project_root = Path(os.getcwd())
+    importer = load_importer(project_root)
 
     id_map = {}
-    mod.import_pages(
+
+    # --- Act
+    counters = importer.import_pages(
         target_course_id=222,
         export_root=export_root,
         canvas=canvas,
         id_map=id_map,
     )
 
-    assert id_map["pages"] == {42: 314}
+    # --- Assert
+    assert counters["imported"] == 1
+    assert id_map["pages"] == {987: 123}
     assert id_map["pages_url"] == {"welcome-old": "welcome"}
 
 
-def test_import_pages_slug_only_response(tmp_path, requests_mock):
-    """
-    Canvas returns only a slug (no numeric id). We still record pages_url mapping.
-    """
+def test_import_pages_location_follow(tmp_path, requests_mock):
+    # --- Arrange export tree
     export_root = tmp_path / "export" / "data" / "101"
-    page_dir = export_root / "pages" / "faq"
+    page_dir = export_root / "pages" / "syllabus-old"
     page_dir.mkdir(parents=True)
-    # Use alternate body filename to exercise fallback search
-    (page_dir / "body.html").write_text("<p>FAQ</p>", encoding="utf-8")
-    (page_dir / "page_metadata.json").write_text(json.dumps({
-        "id": 7,
-        "title": "FAQ",
-        "url": "faq-old",
-        "published": False,
-        "front_page": False
-    }), encoding="utf-8")
 
+    meta = {
+        "id": 321,
+        "url": "syllabus-old",
+        "title": "Syllabus",
+        "published": False,
+        "position": 2,
+    }
+    (page_dir / "page_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    (page_dir / "index.html").write_text("<p>Course overview</p>", encoding="utf-8")
+
+    # --- Arrange API mocks
     api_base = "https://api.example.edu"
-    # POST create page returns only slug
+    create_url = f"{api_base}/api/v1/courses/222/pages"
+    follow_url = f"{api_base}/api/v1/courses/222/pages/syllabus"
+
+    # POST returns only slug and a Location header for canonical fetch (no id in JSON)
     requests_mock.post(
-        f"{api_base}/api/v1/courses/333/pages",
-        json={"url": "faq"},
+        create_url,
+        json={"url": "syllabus"},
+        status_code=201,
+        headers={"Location": follow_url},
+    )
+
+    # GET follow returns full page object with id (and maybe position)
+    requests_mock.get(
+        follow_url,
+        json={"url": "syllabus", "id": 654, "position": 2},
         status_code=200,
     )
 
     canvas = DummyCanvas(api_base)
-    mod = _load_pages_module(Path.cwd())
+    project_root = Path(os.getcwd())
+    importer = load_importer(project_root)
 
     id_map = {}
-    mod.import_pages(
-        target_course_id=333,
+
+    # --- Act
+    counters = importer.import_pages(
+        target_course_id=222,
         export_root=export_root,
         canvas=canvas,
         id_map=id_map,
     )
 
-    # We must have slug mapping; id mapping may be absent if Canvas didn't return a numeric id
-    assert id_map["pages_url"] == {"faq-old": "faq"}
-    # If pages map exists, it should not contain 7
-    if "pages" in id_map:
-        assert 7 not in id_map["pages"]
+    # --- Assert
+    assert counters["imported"] == 1
+    assert id_map["pages"] == {321: 654}
+    assert id_map["pages_url"] == {"syllabus-old": "syllabus"}

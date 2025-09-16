@@ -1,72 +1,32 @@
 # importers/import_pages.py
-"""
-Import Pages into a Canvas course using your CanvasAPI-style wrapper.
-
-Expected export layout (per page directory):
-    pages/<something>/
-      ├─ index.html                 # page body (default filename)
-      └─ page_metadata.json         # includes at least: id, title, (optional) url/slug, published, front_page
-
-This importer:
-  1) Reads page_metadata.json (+ index.html unless metadata specifies a different html file).
-  2) Creates the page via POST /api/v1/courses/{course_id}/pages.
-  3) If front_page==True, sets it on the created page via PUT /api/v1/courses/{course_id}/pages/{url}.
-  4) Records:
-        id_map["pages"][old_id]      = new_page_id   (if Canvas returns a numeric page_id)
-        id_map["pages_url"][old_url] = new_url       (slug-to-slug mapping for modules)
-"""
-
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import Dict, Any, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol
 
-from logging_setup import get_logger
 import requests
-
-_WARNED_PAGE_POSITION = False
-
-
-def _resolve_html_file(page_dir: Path, meta: dict, course_root: Path) -> Path | None:
-    # 1) Prefer metadata html_path if it points to a real file (relative to course_root)
-    html_rel = (meta or {}).get("html_path")
-    if html_rel:
-        p = (course_root / html_rel)
-        if p.exists():
-            return p
-
-    # 2) Look for common filenames inside this page directory
-    for name in ("index.html", "body.html", "description.html", "page.html"):
-        p = page_dir / name
-        if p.exists():
-            return p
-
-    # 3) Last resort: if there’s exactly one *.htm(l) file, use it
-    htmls = list(page_dir.glob("*.htm*"))
-    if len(htmls) == 1:
-        return htmls[0]
-
-    return None
-
+from requests import HTTPError
+from logging_setup import get_logger
 
 __all__ = ["import_pages"]
 
-
-# ---- Protocol to decouple from your exact CanvasAPI class -------------------
+# ---- Protocol to decouple from exact CanvasAPI class -------------------
 class CanvasLike(Protocol):
     session: requests.Session
     api_root: str  # e.g., "https://school.instructure.com/api/v1/"
 
     def post(self, endpoint: str, **kwargs) -> requests.Response: ...
     def put(self, endpoint: str, **kwargs) -> requests.Response: ...
-    def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Dict[str, Any]: ...
-
 
 # ---- Helpers ----------------------------------------------------------------
-def _read_text(path: Path) -> str:
+def _read_json(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
-        return f.read()
+        return json.load(f)
+
+def _read_text_if_exists(path: Path) -> Optional[str]:
+    return path.read_text(encoding="utf-8") if path.exists() else None
 
 def _coerce_int(val: Any) -> Optional[int]:
     try:
@@ -74,131 +34,228 @@ def _coerce_int(val: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
 
+def _error_detail(resp: Optional[requests.Response]) -> str:
+    if not resp:
+        return ""
+    try:
+        j = resp.json()
+        if isinstance(j, dict):
+            if "errors" in j:
+                return json.dumps(j["errors"])
+            if "message" in j:
+                return str(j["message"])
+            return json.dumps(j)
+        return str(j)
+    except Exception:
+        txt = (resp.text or "").strip()
+        return txt[:1000]
 
-# ---- Public entrypoint ------------------------------------------------------
+def _find_html_file(page_dir: Path, meta: Dict[str, Any], logger) -> Optional[Path]:
+    # honor explicit hints first
+    for key in ("html_path", "html", "body_path", "content_path"):
+        val = meta.get(key)
+        if isinstance(val, str) and val.strip():
+            p = (page_dir / val).resolve()
+            if p.exists():
+                return p
+    # common names
+    for name in ("index.html", "body.html", "description.html", "content.html", "page.html", "index.htm"):
+        p = page_dir / name
+        if p.exists():
+            return p
+    # fallback: first *.html/htm file
+    candidates = sorted(list(page_dir.glob("*.html")) + list(page_dir.glob("*.htm")))
+    if candidates:
+        return candidates[0]
+    try:
+        listing = ", ".join(sorted(c.name for c in page_dir.iterdir()))
+        logger.debug("no html file found under %s; contents: %s", page_dir, listing)
+    except Exception:
+        pass
+    return None
+
+def _apply_timeout_from_env(logger) -> float:
+    # Let users cap HTTP waits without touching utils.api
+    timeout_s = float(os.getenv("CANVAS_TIMEOUT") or os.getenv("CANVAS_HTTP_TIMEOUT") or 20)
+    try:
+        # Monkey-patch utils.api DEFAULT_TIMEOUT so canvas.post() uses it
+        import utils.api as api_mod  # type: ignore
+        api_mod.DEFAULT_TIMEOUT = timeout_s
+        logger.debug("HTTP timeout set to %.1fs via utils.api.DEFAULT_TIMEOUT", timeout_s)
+    except Exception:
+        logger.debug("utils.api not available to set DEFAULT_TIMEOUT; relying on requests defaults")
+    return timeout_s
+
+def _create_page(canvas: CanvasLike, course_id: int, wiki: Dict[str, Any]) -> requests.Response:
+    """
+    Canvas 'Create a Page' expects wiki_page[...] fields.
+    Try JSON first, fall back to form-encoded if that 400s.
+    """
+    endpoint = f"/api/v1/courses/{course_id}/pages"
+
+    # 1) JSON envelope
+    try:
+        resp = canvas.post(endpoint, json={"wiki_page": wiki})
+        return resp
+    except HTTPError as e:
+        if getattr(e, "response", None) and e.response.status_code == 400:
+            # 2) form-encoding fall-back
+            data = {f"wiki_page[{k}]": v for k, v in wiki.items() if v is not None}
+            resp2 = canvas.post(endpoint, data=data)
+            return resp2
+        raise
+
+# Warn only once per run if exported position != server position
+_POSITION_MISMATCH_WARNED = False
+
 def import_pages(
     *,
     target_course_id: int,
     export_root: Path,
     canvas: CanvasLike,
-    id_map: Dict[str, Dict[Any, Any]],
-    on_duplicate_title: str = "allow",  # reserved for future (Canvas handles by slug)
-) -> None:
+    id_map: dict[str, dict],
+) -> dict[str, int]:
     """
-    Create pages from export_root/pages into the target course and update id_map.
+    Import wiki pages from export_root/pages/<slug>/.
 
-    Produces/updates:
-        id_map["pages"]     : Dict[int(old_page_id) -> int(new_page_id)]
-        id_map["pages_url"] : Dict[str(old_url_slug) -> str(new_url_slug)]
+    - POST /courses/:id/pages with wiki_page[title/body/published]
+    - If POST returns only slug + Location header, GET it to obtain numeric id
+    - Record:
+        id_map['pages_url'][old_slug] -> new_slug
+        id_map['pages'][old_id]       -> new_id   (when available)
+    - If front_page: True, PUT /courses/:id/front_page after creation
     """
     logger = get_logger(course_id=target_course_id, artifact="pages")
+    counters = {"imported": 0, "skipped": 0, "failed": 0, "total": 0}
 
     pages_dir = export_root / "pages"
     if not pages_dir.exists():
-        logger.warning("No pages directory found at %s", pages_dir)
-        return
+        logger.info("nothing-to-import at %s", pages_dir)
+        return counters
 
-    logger.info("Starting pages import from %s", pages_dir)
+    # Cap HTTP wait and allow quick canary runs
+    _apply_timeout_from_env(logger)
+    page_limit = int(os.getenv("IMPORT_PAGES_LIMIT", "0"))
+    processed = 0
 
-    page_id_map = id_map.setdefault("pages", {})
-    page_url_map = id_map.setdefault("pages_url", {})
+    id_map.setdefault("pages", {})
+    id_map.setdefault("pages_url", {})
 
-    imported = 0
-    skipped = 0
-    failed = 0
-
-    course_root = export_root if isinstance(export_root, Path) else Path(export_root)
-
-    for meta_file in pages_dir.rglob("page_metadata.json"):
-        page_dir = meta_file.parent
+    for page_dir in sorted(p for p in pages_dir.iterdir() if p.is_dir()):
+        meta_path = page_dir / "page_metadata.json"
+        if not meta_path.exists():
+            counters["skipped"] += 1
+            logger.warning("missing_metadata dir=%s", page_dir)
+            continue
 
         try:
-            metadata = json.loads(_read_text(meta_file))
+            meta = _read_json(meta_path)
         except Exception as e:
-            failed += 1
-            logger.exception("Failed to read %s: %s", meta_file, e)
-            continue
-        
-        #log once - PageMeta.position is ignored on import. Ordering is from ModuleItemMeta.position.
-        global _WARNED_PAGE_POSITION
-        if not _WARNED_PAGE_POSITION and "position" in metadata:
-            logger.debug(
-                "Ignoring PageMeta.position; Canvas has no global Pages order. "
-                "ModuleItemMeta.position governs ordering within modules."
-            )
-            _WARNED_PAGE_POSITION = True
-
-        old_id = _coerce_int(metadata.get("id"))
-        title = metadata.get("title") or metadata.get("page_title")
-        old_url = metadata.get("url") or metadata.get("slug")
-
-        # Resolve HTML body file (new + old export layouts)
-        html_path = _resolve_html_file(page_dir, metadata, course_root)
-        if not html_path:
-            skipped += 1
-            logger.warning("Skipping page at %s (missing HTML body file)", page_dir)
+            counters["failed"] += 1
+            logger.exception("failed to read metadata %s: %s", meta_path, e)
             continue
 
+        counters["total"] += 1
+
+        title = (meta.get("title") or "").strip()
         if not title:
-            skipped += 1
-            logger.warning("Skipping %s (missing page title)", meta_file)
+            counters["skipped"] += 1
+            logger.warning("skipping %s (missing page title)", meta_path)
             continue
 
-        html = _read_text(html_path)
-        published = bool(metadata.get("published", True))   # default True matches export side
-        is_front_page = bool(metadata.get("front_page", False))
+        html_path = _find_html_file(page_dir, meta, logger)
+        body_html: Optional[str] = None
+        if html_path:
+            body_html = _read_text_if_exists(html_path)
+        if body_html is None:
+            body_html = meta.get("body") or meta.get("description") or ""
 
+        body_bytes = len((body_html or "").encode("utf-8"))
+        logger.debug("create page title=%r bytes=%d dir=%s", title, body_bytes, page_dir)
+
+        wiki_page = {
+            "title": title,
+            "body": body_html,
+            "published": bool(meta.get("published", False)),
+        }
+
+        old_id = _coerce_int(meta.get("id"))
+        old_slug = meta.get("url") or meta.get("slug")
+
+        # --- Create page
         try:
-            # ---- POST create page (Canvas expects 'wiki_page' envelope)
-            payload = {
-                "wiki_page": {
-                    "title": title,
-                    "body": html,
-                    "published": published,
-                }
-            }
-            new_page = canvas.post_json(
-                f"/api/v1/courses/{target_course_id}/pages",
-                payload=payload,
-            )
-
-            # Canvas returns at least 'url' (slug); sometimes 'page_id'
-            new_url = new_page.get("url") or new_page.get("slug")
-            new_page_id = _coerce_int(new_page.get("page_id") or new_page.get("id"))
-
-            if old_id is not None and new_page_id is not None:
-                page_id_map[old_id] = new_page_id
-            if old_url and new_url:
-                page_url_map[str(old_url)] = str(new_url)
-
-            # Mark front page if requested
-            if is_front_page and new_url:
-                _set_front_page(canvas=canvas, course_id=target_course_id, url=new_url)
-
-            imported += 1
-            logger.info("Created page '%s' (url=%s, id=%s)", title, new_url, new_page_id)
-
+            resp = _create_page(canvas, target_course_id, wiki_page)
+            try:
+                data = resp.json()
+            except ValueError:
+                data = {}
+        except HTTPError as e:
+            counters["failed"] += 1
+            detail = _error_detail(getattr(e, "response", None))
+            logger.error("failed-create title=%s: %s | details=%s", title, str(e), detail)
+            continue
+        except requests.RequestException as e:
+            counters["failed"] += 1
+            logger.error("network-error title=%s: %s", title, e)
+            continue
         except Exception as e:
-            failed += 1
-            logger.exception("Failed to create page from %s: %s", page_dir, e)
+            counters["failed"] += 1
+            logger.exception("failed-create title=%s: %s", title, e)
+            continue
+
+        new_slug: Optional[str] = data.get("url")
+        new_id: Optional[int] = _coerce_int(data.get("id") or data.get("page_id"))
+
+        # Follow Location if id missing
+        if new_id is None and "Location" in resp.headers:
+            try:
+                follow = canvas.session.get(resp.headers["Location"])
+                follow.raise_for_status()
+                try:
+                    j2 = follow.json()
+                except ValueError:
+                    j2 = {}
+                new_id = _coerce_int(j2.get("id") or j2.get("page_id"))
+                if not new_slug:
+                    new_slug = j2.get("url")
+                data = j2 or data
+            except Exception as e:
+                logger.debug("follow-location failed for title=%s: %s", title, e)
+
+        if not new_slug:
+            counters["failed"] += 1
+            logger.error("failed-create (no slug) title=%s", title)
+            continue
+
+        if old_slug:
+            id_map["pages_url"][str(old_slug)] = str(new_slug)
+        if old_id is not None and new_id is not None:
+            id_map["pages"][old_id] = new_id
+
+        global _POSITION_MISMATCH_WARNED
+        exp_pos = meta.get("position")
+        got_pos = data.get("position")
+        if exp_pos is not None and got_pos is not None and exp_pos != got_pos and not _POSITION_MISMATCH_WARNED:
+            logger.warning("position-mismatch exported=%s server=%s slug=%s", exp_pos, got_pos, new_slug)
+            _POSITION_MISMATCH_WARNED = True
+
+        counters["imported"] += 1
+        processed += 1
+
+        # Front page after creation
+        if meta.get("front_page"):
+            try:
+                canvas.put(f"/api/v1/courses/{target_course_id}/front_page", json={"url": new_slug})
+            except Exception as e:
+                counters["failed"] += 1
+                logger.error("failed-frontpage slug=%s: %s", new_slug, e)
+
+        if page_limit and processed >= page_limit:
+            logger.info("IMPORT_PAGES_LIMIT=%d reached; stopping early", page_limit)
+            break
 
     logger.info(
         "Pages import complete. imported=%d skipped=%d failed=%d total=%d",
-        imported, skipped, failed, imported + skipped + failed
+        counters["imported"], counters["skipped"], counters["failed"], counters["total"],
     )
-
-
-# ---- Canvas ops -------------------------------------------------------------
-def _set_front_page(
-    *,
-    canvas: CanvasLike,
-    course_id: int,
-    url: str,
-) -> None:
-    """
-    Mark a page as the course front page:
-    PUT /courses/{course_id}/pages/{url} with {"wiki_page": {"front_page": true}}.
-    """
-    payload = {"wiki_page": {"front_page": True}}
-    resp = canvas.put(f"/api/v1/courses/{course_id}/pages/{url}", json=payload)
-    resp.raise_for_status()
+    return counters
