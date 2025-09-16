@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "course"]
+ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "announcements", "modules", "course"]
 
 
 def _scan_export(export_root: Path) -> Dict[str, int]:
@@ -147,6 +147,7 @@ def main() -> int:
     from importers.import_quizzes import import_quizzes
     from importers.import_files import import_files
     from importers.import_discussions import import_discussions
+    from importers.import_announcements import import_announcements
     from importers.import_modules import import_modules
     from importers.import_course_settings import import_course_settings
 
@@ -189,6 +190,13 @@ def main() -> int:
                                    export_root=args.export_root,
                                    canvas=target_api,
                                    id_map=id_map)
+                save_id_map(id_map_path, id_map)
+                
+            elif step == "announcements":
+                import_announcements(target_course_id=args.target_course_id,
+                                    export_root=args.export_root,
+                                    canvas=target_api,
+                                    id_map=id_map)
                 save_id_map(id_map_path, id_map)
 
             elif step == "modules":
