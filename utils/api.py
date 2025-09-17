@@ -61,7 +61,7 @@ class CanvasAPI:
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
+            # "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         })
 
