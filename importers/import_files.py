@@ -25,6 +25,10 @@ import requests
 from logging_setup import get_logger  # project-level logger adapter
 from utils.fs import file_hashes
 
+import mimetypes
+import time
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+
 __all__ = ["import_files", "_manifest_path"]
 
 # ---- Manifest helpers -------------------------------------------------------
@@ -238,6 +242,17 @@ def import_files(
         failed,
         imported + skipped + failed,
     )
+    
+# helper to redact token in logs ----
+def _redact_token(u: str) -> str:
+    try:
+        parts = urlsplit(u)
+        q = dict(parse_qsl(parts.query, keep_blank_values=True))
+        if "token" in q:
+            q["token"] = "<redacted>"
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment))
+    except Exception:
+        return "<unparseable-url>"
 
 
 # ---- Core upload routine ----------------------------------------------------
@@ -250,55 +265,99 @@ def _upload_file_via_canvas_api(
     on_duplicate: str,
     logger: logging.Logger,
 ) -> int:
-    """
-    Upload one file using Canvas' multi-step flow with your CanvasAPI wrapper.
+        # Retry the whole handshake+upload a few times (tokens can expire quickly; InstFS can 500 transiently)
+    max_attempts = 3
+    delay = 1.0
+    last_exc = None
 
-    Returns:
-        New Canvas file ID (int).
-    """
-    if not file_path.exists():
-        raise FileNotFoundError(f"Missing exported file: {file_path}")
-
-    # Step 1: Initialize upload via API (wrapper handles base URL/auth/retries)
-    init_json = canvas.begin_course_file_upload(
-        course_id=course_id,
-        name=file_path.name,
-        parent_folder_path=folder_path,
-        on_duplicate=on_duplicate,
-    )
-    upload_url = init_json["upload_url"]
-    upload_params = init_json.get("upload_params", {})
-
-    # Step 2: POST multipart to the upload_url (NOT the API host).
-    # Use the same session (via canvas._multipart_post) so tests can intercept with requests_mock.
-    with open(file_path, "rb") as fh:
-        up = canvas._multipart_post(
-            upload_url,
-            data=upload_params,
-            files={"file": (file_path.name, fh)},
+    for attempt in range(1, max_attempts + 1):
+        # Step 1: Initialize upload via API
+        init_json = canvas.begin_course_file_upload(
+            course_id=course_id,
+            name=file_path.name,
+            parent_folder_path=folder_path,
+            on_duplicate=on_duplicate,
         )
+        upload_url = init_json.get("upload_url")
+        upload_params = dict(init_json.get("upload_params", {}))  # copy so we can add safe defaults
 
-    # Step 3: If the upload host responded with a redirect to Canvas, follow with the same session.
-    # Otherwise parse JSON from the upload response.
-    if 300 <= up.status_code < 400 and "Location" in up.headers:
-        finalize_url = up.headers["Location"]
-        finalize = canvas.session.get(finalize_url)
-        finalize.raise_for_status()
+        # Fill common params if exporter/instance didn’t provide them
+        ctype, _ = mimetypes.guess_type(file_path.name)
+        if "filename" not in upload_params:
+            upload_params["filename"] = file_path.name
+        if "content_type" not in upload_params and ctype:
+            upload_params["content_type"] = ctype
+        if "size" not in upload_params:
+            try:
+                upload_params["size"] = file_path.stat().st_size
+            except Exception:
+                pass
+
+        if not upload_url:
+            raise RuntimeError("Upload handshake missing upload_url")
+
+        redacted = _redact_token(str(upload_url))
+        logger.debug("upload attempt=%d url=%s params_keys=%s",
+                     attempt, redacted, sorted(upload_params.keys()))
+
+        # Step 2: multipart POST to the upload host
         try:
-            payload: Any = finalize.json()
-        except ValueError:
-            payload = {}
-    else:
-        up.raise_for_status()
-        try:
-            payload = up.json()
-        except ValueError:
-            payload = {}
+            with open(file_path, "rb") as fh:
+                up = canvas._multipart_post(
+                    str(upload_url),
+                    data=upload_params,
+                    files={"file": (file_path.name, fh)},
+                )
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            body = ""
+            try:
+                body = (e.response.text or "")[:500]
+            except Exception:
+                pass
+            logger.warning(
+                "upload HTTP error attempt=%d status=%s url=%s body=%r",
+                attempt, status, redacted, body
+            )
+            last_exc = e
+            # Retry only for 5xx/timeout; else bail
+            if status and 500 <= status < 600 and attempt < max_attempts:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            raise
 
-    # Canvas may return the attachment directly or nested under "attachment"
-    new_id = _extract_new_file_id(payload)
-    if new_id is not None:
-        return new_id
+        # Step 3: finalize/parse payload
+        if 300 <= up.status_code < 400 and "Location" in up.headers:
+            finalize_url = up.headers["Location"]
+            red_final = _redact_token(finalize_url)
+            logger.debug("following finalize redirect to %s", red_final)
+            finalize = canvas.session.get(finalize_url)
+            finalize.raise_for_status()
+            try:
+                payload: Any = finalize.json()
+            except ValueError:
+                payload = {}
+        else:
+            try:
+                payload = up.json()
+            except ValueError:
+                payload = {}
 
-    logger.debug("Unexpected upload response payload: %s", payload)
-    raise RuntimeError("Canvas upload did not return a file id")
+        new_id = _extract_new_file_id(payload)
+        if new_id is not None:
+            return new_id
+
+        logger.warning("upload attempt=%d returned unexpected payload; will%s retry. payload_keys=%s",
+                       attempt, " not" if attempt >= max_attempts else "",
+                       list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__)
+
+        last_exc = RuntimeError("Canvas upload did not return a file id")
+        if attempt < max_attempts:
+            time.sleep(delay)
+            delay *= 2
+
+    # If we exit the loop, raise the last thing we saw
+    if isinstance(last_exc, Exception):
+        raise last_exc
+    raise RuntimeError("upload failed without exception")

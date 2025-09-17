@@ -28,6 +28,16 @@ DEFAULT_PER_PAGE = 100
 USER_AGENT = "CanvasMigrations/1.0 (+https://example.org)"  # customize
 API_PREFIX = "/api/v1"
 
+# Allow overrides via env (e.g., CANVAS_HTTP_TIMEOUT="10,300")
+_to = os.getenv("CANVAS_HTTP_TIMEOUT") or os.getenv("CANVAS_TIMEOUT")
+if _to:
+    try:
+        parts = [float(p.strip()) for p in _to.split(",")]
+        if len(parts) == 2:
+            DEFAULT_TIMEOUT = (parts[0], parts[1])  # type: ignore[assignment]
+    except Exception:
+        pass
+
 log = logging.getLogger(__name__)
 
 
@@ -215,13 +225,34 @@ class CanvasAPI:
     def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
         """
         Perform a multipart/form-data POST (used for Canvas file uploads).
-        Strips the default Content-Type so requests can set it correctly.
+        Retries on 5xx/timeouts; strips default JSON content-type.
         """
         headers = self.session.headers.copy()
-        headers.pop("Content-Type", None) # let requests set multipart boundary
-        resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
-        resp.raise_for_status()
-        return resp
+        headers.pop("Content-Type", None)  # let requests set multipart boundary
+
+        max_attempts = 4
+        delay = 1.0
+        last_err = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
+                # Treat 5xx as retryable
+                if 500 <= resp.status_code < 600:
+                    raise requests.HTTPError(f"{resp.status_code} server error", response=resp)
+                resp.raise_for_status()
+                return resp
+            except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as e:
+                last_err = e
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if attempt == max_attempts or not (status is None or status >= 500):
+                    break
+                jitter = random.uniform(0, 0.25 * delay)
+                time.sleep(delay + jitter)
+                delay *= 2
+        if isinstance(last_err, requests.HTTPError) and last_err.response is not None:
+            # Bubble up with context
+            raise last_err
+        raise requests.HTTPError("multipart upload failed")  # generic
 
     @staticmethod
     def _json_or_empty(resp: requests.Response) -> dict:
