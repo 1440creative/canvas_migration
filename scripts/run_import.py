@@ -1,223 +1,202 @@
 #!/usr/bin/env python3
 """
-scripts/run_import.py
+Canvas import runner.
 
-Orchestrates the import pipeline in the right order, using your CanvasAPI client
-(from utils.api) and a persistent id_map.json. Supports optional Blueprint sync.
-Lazy-imports heavy modules so --dry-run does not require API creds or importers.
+Examples:
+  python scripts/run_import.py --export-root export/data --target-course-id 999 --dry-run -v
+  python scripts/run_import.py --export-root export/data --target-course-id 999 -vv
+  python scripts/run_import.py --export-root export/data --create-in-account 135 --course-name "CMPT 101" --publish-new-course
+
+Notes:
+- You must have CANVAS_SOURCE_URL/TOKEN and CANVAS_TARGET_URL/TOKEN configured for utils.api.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any
 
-# --- Ensure repo root is importable without needing PYTHONPATH=. ---
+# --- ensure repo root on sys.path ---
 THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = THIS_FILE.parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from logging_setup import setup_logging, get_logger
+from utils.api import source_api, target_api  # source = read from, target = write to
+from importers.import_course import import_course, ALL_STEPS as IMPORT_STEPS
 
-ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "announcements", "modules", "course"]
+
+def _read_json(p: Path) -> dict:
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
-def _scan_export(export_root: Path) -> Dict[str, int]:
+def _create_target_course(
+    *,
+    account_id: int,
+    export_root: Path,
+    source_course_id: int,
+    name: str | None,
+    code: str | None,
+    term_id: int | None,
+    publish: bool,
+    log,
+) -> int:
     """
-    Return counts of artifacts discovered in export_root for a dry-run plan.
+    Create a new course on the TARGET Canvas under the given subaccount,
+    returning the new course id.
     """
-    counts: Dict[str, int] = {k: 0 for k in ALL_STEPS}
-    # pages
-    counts["pages"] = len(list((export_root / "pages").rglob("page_metadata.json")))
-    # assignments
-    counts["assignments"] = len(list((export_root / "assignments").rglob("assignment_metadata.json")))
-    # quizzes
-    counts["quizzes"] = len(list((export_root / "quizzes").rglob("quiz_metadata.json")))
-    # files (sidecar metadata)
-    counts["files"] = len(list((export_root / "files").rglob("*.metadata.json")))
-    # discussions
-    counts["discussions"] = len(list((export_root / "discussions").rglob("discussion_metadata.json")))
-    # modules
-    mod_file = export_root / "modules" / "modules.json"
-    if mod_file.exists():
+    # Prefer metadata defaults if not given
+    meta_path = export_root / str(source_course_id) / "course" / "course_metadata.json"
+    exported_meta = _read_json(meta_path)
+    course_name = name or exported_meta.get("name") or "Imported Course"
+    course_code = code or exported_meta.get("course_code") or course_name.replace(" ", "-")[:50]
+
+    payload: dict = {"course": {"name": course_name, "course_code": course_code}}
+    if term_id:
+        payload["course"]["term_id"] = int(term_id)
+    if publish:
+        payload["course"]["workflow_state"] = "available"
+
+    log.info(
+        "Creating target course",
+        extra={"account_id": account_id, "name": course_name, "course_code": course_code},
+    )
+    resp = target_api.post(f"/api/v1/accounts/{account_id}/courses", json=payload)
+
+    # Try to extract id from body first
+    try:
+        body = resp.json()
+    except Exception:
+        body = {}
+    new_id = body.get("id")
+
+    # Some Canvas deployments return 201 + Location without id in body
+    if not isinstance(new_id, int) and "Location" in resp.headers:
+        follow = target_api.session.get(resp.headers["Location"])
+        follow.raise_for_status()
         try:
-            data = json.loads(mod_file.read_text(encoding="utf-8"))
-            counts["modules"] = len(data) if isinstance(data, list) else 0
+            body = follow.json()
         except Exception:
-            counts["modules"] = 0
-    # course
-    if (export_root / "course" / "course_metadata.json").exists() or (export_root / "course" / "settings.json").exists():
-        counts["course"] = 1
-    return counts
+            body = {}
+        new_id = body.get("id")
 
+    if not isinstance(new_id, int):
+        raise RuntimeError("Failed to create target course (no id returned)")
 
-def _int_keys(d: Dict[Any, Any]) -> Dict[Any, Any]:
-    out = {}
-    for k, v in (d or {}).items():
-        try:
-            out[int(k)] = v
-        except (ValueError, TypeError):
-            out[k] = v
-    return out
-
-
-def _normalize_id_map(m: Dict[str, Dict[Any, Any]]) -> Dict[str, Dict[Any, Any]]:
-    int_maps = {"assignments", "files", "quizzes", "discussions", "pages", "modules"}
-    norm = {}
-    for k, v in (m or {}).items():
-        if k in int_maps and isinstance(v, dict):
-            norm[k] = _int_keys(v)
-        else:
-            norm[k] = v
-    return norm
-
-
-def load_id_map(path: Path) -> Dict[str, Dict[Any, Any]]:
-    if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return _normalize_id_map(data)
-    return {}
-
-
-def save_id_map(path: Path, id_map: Dict[str, Dict[Any, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(id_map, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Run Canvas import pipeline")
-    p.add_argument("--export-root", required=True, type=Path,
-                   help="Path like export/data/{source_course_id}")
-    p.add_argument("--target-course-id", required=True, type=int,
-                   help="Target Canvas course ID to import into")
-    p.add_argument("--id-map", type=Path,
-                   help="Path to id_map.json (default: {export_root}/id_map.json)")
-    p.add_argument("--steps", type=str, default=",".join(ALL_STEPS),
-                   help=f"Comma-separated steps to run (default: {','.join(ALL_STEPS)})")
-    p.add_argument("--include-quiz-questions", action="store_true",
-                   help="Also create quiz questions when quizzes data is present")
-    p.add_argument("--blueprint-sync", action="store_true",
-                   help="Queue a blueprint sync after course settings update")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Scan export and print what would be imported without making API calls")
-    p.add_argument("-v", "--verbose", action="count", default=1,
-                   help="Increase verbosity")
-    return p.parse_args()
+    log.info("Created target course", extra={"new_course_id": new_id})
+    return int(new_id)
 
 
 def main() -> int:
-    args = parse_args()
-    steps = [s.strip() for s in args.steps.split(",") if s.strip()]
+    p = argparse.ArgumentParser(description="Run Canvas course import (programmatic).")
+    p.add_argument("--export-root", type=Path, required=True, help="Root directory of export data (e.g., export/data)")
+    # Destination selection: either provide an existing target course id, or request a new one in an account
+    dest = p.add_mutually_exclusive_group(required=True)
+    dest.add_argument("--target-course-id", type=int, help="Existing target Canvas course id to import INTO")
+    dest.add_argument(
+        "--create-in-account",
+        type=int,
+        metavar="ACCOUNT_ID",
+        help="Create a NEW target course in this subaccount id on the target instance and import into it",
+    )
+    # New-course options (used only with --create-in-account)
+    p.add_argument("--course-name", help="Name for the NEW course (default: from exported course metadata)")
+    p.add_argument("--course-code", help="Course code for the NEW course (default: derived from name)")
+    p.add_argument("--term-id", type=int, help="Enrollment term id for the NEW course (optional)")
+    p.add_argument("--publish-new-course", action="store_true", help="Publish the NEW course upon creation")
 
-    # DRY-RUN early path: no heavy imports or env needed
+    # Import steps & behavior
+    p.add_argument(
+        "--steps",
+        nargs="+",
+        choices=IMPORT_STEPS,
+        default=IMPORT_STEPS,
+        help="Subset of import steps to run (default: all)",
+    )
+    p.add_argument(
+        "--include-quiz-questions",
+        action="store_true",
+        help="When importing quizzes, also import questions (if present in export)",
+    )
+    p.add_argument(
+        "--queue-blueprint-sync",
+        action="store_true",
+        help="Queue a Blueprint sync after course settings (if blueprint metadata present)",
+    )
+    p.add_argument("--continue-on-error", action="store_true", help="Continue other steps if one fails")
+    p.add_argument("--dry-run", action="store_true", help="Print planned steps and exit without importing")
+    p.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity (-v=INFO, -vv=DEBUG)")
+    args = p.parse_args()
+
+    # Setup logging (0=WARNING, 1=INFO, 2+=DEBUG)
+    verbosity = 1 if args.verbose == 1 else (2 if args.verbose >= 2 else 0)
+    setup_logging(verbosity=verbosity)
+    # Use source course id (from export tree) purely for logging context
+    # If you exported from course X, the export lives under export_root/X/...
+    # We may import into a different/new target course id.
+    # For context, try to infer the source course id directory under export_root.
+    # If ambiguous, fall back to '-'.
+    try:
+        # Heuristic: if only one directory under export_root, use it
+        subdirs = [d.name for d in args.export_root.iterdir() if d.is_dir()]
+        src_id_for_log = int(subdirs[0]) if len(subdirs) == 1 and subdirs[0].isdigit() else "-"
+    except Exception:
+        src_id_for_log = "-"
+    log = get_logger(artifact="runner", course_id=src_id_for_log)
+
+    # Dry-run: print the planned steps (tests look for " - <step>" lines)
     if args.dry_run:
-        counts = _scan_export(args.export_root)
-        print(f"DRY-RUN: plan for steps={steps}")
-        for s in steps:
-            c = counts.get(s, 0)
-            print(f"  - {s:<12} : {c} item(s)")
-        # id_map keys present
-        id_map_path = args.id_map or (args.export_root / "id_map.json")
-        id_map = load_id_map(id_map_path)
-        present_maps = sorted(list(id_map.keys()))
-        print(f"  id_map keys present: {present_maps if present_maps else 'none'}")
-        print("No API calls were made (dry-run).")
+        print("Import plan:")
+        for s in args.steps:
+            print(f" - {s}")
         return 0
 
-    # Heavy path: do real imports
-    from dotenv import load_dotenv
-    load_dotenv()
+    # Determine target course id (existing vs create-new)
+    if args.create_in_account:
+        target_course_id = _create_target_course(
+            account_id=args.create_in_account,
+            export_root=args.export_root,
+            source_course_id=int(src_id_for_log) if isinstance(src_id_for_log, int) else 0,
+            name=args.course_name,
+            code=args.course_code,
+            term_id=args.term_id,
+            publish=args.publish_new_course,
+            log=log,
+        )
+    else:
+        target_course_id = int(args.target_course_id)
 
-    from logging_setup import setup_logging, get_logger
-    setup_logging(verbosity=args.verbose)
-    log = get_logger(artifact="runner", course_id=args.target_course_id)
-    log.info("Starting import pipeline steps=%s export_root=%s", args.steps, args.export_root)
+    # Kick off the programmatic import
+    log.info(
+        "Starting import",
+        extra={
+            "export_root": str(args.export_root),
+            "target_course_id": target_course_id,
+            "steps": ",".join(args.steps),
+        },
+    )
 
-    # Import the API client only now, after sys.path injection and dotenv load
-    from utils.api import target_api  # type: ignore
-    if target_api is None:
-        log.error("target_api is not configured. Set CANVAS_TARGET_URL and CANVAS_TARGET_TOKEN in your .env")
-        return 2
+    result = import_course(
+        target_course_id=target_course_id,
+        export_root=args.export_root,
+        canvas=target_api,  # write into TARGET instance
+        steps=args.steps,
+        id_map_path=args.export_root / str(src_id_for_log) / "id_map.json" if isinstance(src_id_for_log, int) else None,
+        include_quiz_questions=args.include_quiz_questions,
+        queue_blueprint_sync=args.queue_blueprint_sync,
+        continue_on_error=args.continue_on_error,
+    )
 
-    # Import step implementations lazily
-    from importers.import_pages import import_pages
-    from importers.import_assignments import import_assignments
-    from importers.import_quizzes import import_quizzes
-    from importers.import_files import import_files
-    from importers.import_discussions import import_discussions
-    from importers.import_announcements import import_announcements
-    from importers.import_modules import import_modules
-    from importers.import_course_settings import import_course_settings
-
-    id_map_path = args.id_map or (args.export_root / "id_map.json")
-    id_map: Dict[str, Dict[Any, Any]] = load_id_map(id_map_path)
-
-    for step in steps:
-        try:
-            if step == "pages":
-                import_pages(target_course_id=args.target_course_id,
-                             export_root=args.export_root,
-                             canvas=target_api,
-                             id_map=id_map)
-                save_id_map(id_map_path, id_map)
-
-            elif step == "assignments":
-                import_assignments(target_course_id=args.target_course_id,
-                                   export_root=args.export_root,
-                                   canvas=target_api,
-                                   id_map=id_map)
-                save_id_map(id_map_path, id_map)
-
-            elif step == "quizzes":
-                import_quizzes(target_course_id=args.target_course_id,
-                               export_root=args.export_root,
-                               canvas=target_api,
-                               id_map=id_map,
-                               include_questions=args.include_quiz_questions)
-                save_id_map(id_map_path, id_map)
-
-            elif step == "files":
-                import_files(target_course_id=args.target_course_id,
-                             export_root=args.export_root,
-                             canvas=target_api,
-                             id_map=id_map)
-                save_id_map(id_map_path, id_map)
-
-            elif step == "discussions":
-                import_discussions(target_course_id=args.target_course_id,
-                                   export_root=args.export_root,
-                                   canvas=target_api,
-                                   id_map=id_map)
-                save_id_map(id_map_path, id_map)
-                
-            elif step == "announcements":
-                import_announcements(target_course_id=args.target_course_id,
-                                    export_root=args.export_root,
-                                    canvas=target_api,
-                                    id_map=id_map)
-                save_id_map(id_map_path, id_map)
-
-            elif step == "modules":
-                import_modules(target_course_id=args.target_course_id,
-                               export_root=args.export_root,
-                               canvas=target_api,
-                               id_map=id_map)
-                save_id_map(id_map_path, id_map)
-
-            elif step == "course":
-                import_course_settings(target_course_id=args.target_course_id,
-                                       export_root=args.export_root,
-                                       canvas=target_api,
-                                       queue_blueprint_sync=bool(args.blueprint_sync))
-            else:
-                log.warning("Unknown step '%s' — skipping", step)
-        except Exception as e:
-            log.exception("Step '%s' failed: %s", step, e)
-
-    log.info("Import pipeline complete")
-    return 0
+    # Summarize + exit code
+    counts = result.get("counts", {})
+    errors = result.get("errors", [])
+    log.info("Import complete", extra={"counts": counts, "errors": len(errors), "target_course_id": target_course_id})
+    return 0 if not errors else 2
 
 
 if __name__ == "__main__":
