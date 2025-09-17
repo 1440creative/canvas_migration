@@ -9,8 +9,16 @@ import random
 from typing import Dict, Any, Optional, Union, List
 from urllib.parse import urljoin
 
+# --- ensure repo root on sys.path ---
+THIS_FILE = Path(__file__).resolve()
+REPO_ROOT = THIS_FILE.parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
+# Load env files (repo defaults, then local overrides)
 from dotenv import load_dotenv
+load_dotenv(str(REPO_ROOT / ".env"))                 # optional, checked-in defaults
+load_dotenv(str(REPO_ROOT / ".env.local"), override=True)  # untracked secrets
 
 # --- Tunables ---------------------------------------------------------------
 DEFAULT_TIMEOUT = (5, 30)  # (connect, read) seconds
