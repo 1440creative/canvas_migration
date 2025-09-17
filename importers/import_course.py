@@ -146,7 +146,7 @@ def import_course(
                 import_blueprint_settings(
                     target_course_id=target_course_id,
                     export_root=export_root,
-                    api=canvas,
+                    canvas=canvas,
                 )
                 counts["blueprint"] = 1
                 
