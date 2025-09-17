@@ -9,7 +9,7 @@ import requests
 from logging_setup import get_logger
 
 # Keep the list consistent with the runner
-ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "course"]
+ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "course", "blueprint"]
 
 
 class CanvasLike(Protocol):
@@ -102,6 +102,7 @@ def import_course(
     from importers.import_discussions import import_discussions
     from importers.import_modules import import_modules
     from importers.import_course_settings import import_course_settings
+    from importers.import_blueprint import import_blueprint_settings
 
     id_map_path = id_map_path or (export_root / "id_map.json")
     id_map: Dict[str, Dict[Any, Any]] = load_id_map(id_map_path)
@@ -141,6 +142,26 @@ def import_course(
             elif step == "course":
                 import_course_settings(target_course_id=target_course_id, export_root=export_root, canvas=canvas,
                                        queue_blueprint_sync=bool(queue_blueprint_sync))
+            elif step == "blueprint":
+                import_blueprint_settings(
+                    target_course_id=target_course_id,
+                    export_root=export_root,
+                    api=canvas,
+                )
+                counts["blueprint"] = 1
+                
+                # optionally queue a sync if the CLI flag was set
+                if queue_blueprint_sync:
+                    try:
+                        # try to discover a template id
+                        templates = canvas.get(f"/api/v1/courses/{target_course_id}/blueprint_templates")
+                        tmpl_id = (templates[0]["id"] if isinstance(templates, list) and templates else "default")
+
+                        # queue a sync (works with numeric id or the 'default' alias on many tenants)
+                        canvas.post(f"/api/v1/courses/{target_course_id}/blueprint_templates/{tmpl_id}/queue", json={})
+                        log.info("Queued Blueprint sync", extra={"template_id": tmpl_id})
+                    except Exception as e:
+                        log.warning("Could not queue Blueprint sync: %s", e)
             else:
                 log.warning("Unknown step '%s' — skipping", step)
                 continue
