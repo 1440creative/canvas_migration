@@ -2,7 +2,7 @@
 from export.export_modules import export_modules
 from utils.api import CanvasAPI
 
-def test_export_modules_pagination(tmp_output, requests_mock):
+def test_export_modules_pagination(tmp_path, requests_mock):
     course_id = 303
     base_api = "https://canvas.test/api/v1"
 
@@ -42,7 +42,7 @@ def test_export_modules_pagination(tmp_output, requests_mock):
     # Use a fresh client so we don't depend on global source_api
     api_client = CanvasAPI(base_api, "tkn")
 
-    export_root = tmp_output / "export" / "data"
+    export_root = tmp_path / "export" / "data"
     metadata = export_modules(course_id, export_root, api_client)
 
     assert len(metadata) == 2
