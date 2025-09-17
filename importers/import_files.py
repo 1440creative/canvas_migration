@@ -7,11 +7,13 @@ Reads exported file metadata (.metadata.json next to each file) under:
 
 Per file:
   1) Initialize upload via API (returns upload_url + upload_params)
-  2) POST multipart to upload_url (not the API host)
+  2) Perform either:
+       - S3-style multipart POST (classic)
+       - InstFS JSON handshake then PUT (inscloudgate/inst-fs hosts)
   3) Follow finalize redirect (if present) using the same auth session
   4) Record old_id -> new_id in id_map["files"]
 
-This module exposes a single public entrypoint: `import_files`.
+Public entrypoint: `import_files`.
 """
 
 from __future__ import annotations
@@ -24,10 +26,6 @@ from typing import Dict, Any, Protocol, Optional
 import requests
 from logging_setup import get_logger  # project-level logger adapter
 from utils.fs import file_hashes
-
-import mimetypes
-import time
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 __all__ = ["import_files", "_manifest_path"]
 
@@ -95,14 +93,12 @@ def _extract_new_file_id(payload: Any) -> Optional[int]:
     if not isinstance(payload, dict):
         return None
 
-    # direct id
     if "id" in payload:
         try:
             return int(payload["id"])
         except (TypeError, ValueError):
             pass
 
-    # nested attachment.id
     att = payload.get("attachment")
     if isinstance(att, dict) and "id" in att:
         try:
@@ -111,6 +107,37 @@ def _extract_new_file_id(payload: Any) -> Optional[int]:
             pass
 
     return None
+
+
+def _safe_json(resp: requests.Response) -> dict:
+    """Best-effort JSON parse (handles empty/204/non-JSON)."""
+    if resp.status_code == 204 or not resp.content:
+        return {}
+    try:
+        return resp.json()
+    except ValueError:
+        return {}
+
+
+def _looks_like_instfs(upload_url: str, params: dict) -> bool:
+    """
+    Heuristic: InstFS handshake when upload host is inscloudgate/inst-fs and
+    upload_params look like {"filename","content_type","size"} (no S3 fields).
+    """
+    host_hint = "inscloudgate.net" in str(upload_url) or "inst-fs" in str(upload_url)
+    keys = set((params or {}).keys())
+    jsonish = {"filename", "content_type", "size"}
+    s3ish = {
+        "policy",
+        "signature",
+        "AWSAccessKeyId",
+        "key",
+        "x-amz-signature",
+        "x-amz-credential",
+        "x-amz-algorithm",
+        "success_action_status",
+    }
+    return host_hint and keys.issubset(jsonish) and not (keys & s3ish)
 
 
 # ---- Public entrypoint ------------------------------------------------------
@@ -242,17 +269,6 @@ def import_files(
         failed,
         imported + skipped + failed,
     )
-    
-# helper to redact token in logs ----
-def _redact_token(u: str) -> str:
-    try:
-        parts = urlsplit(u)
-        q = dict(parse_qsl(parts.query, keep_blank_values=True))
-        if "token" in q:
-            q["token"] = "<redacted>"
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment))
-    except Exception:
-        return "<unparseable-url>"
 
 
 # ---- Core upload routine ----------------------------------------------------
@@ -265,99 +281,138 @@ def _upload_file_via_canvas_api(
     on_duplicate: str,
     logger: logging.Logger,
 ) -> int:
-        # Retry the whole handshake+upload a few times (tokens can expire quickly; InstFS can 500 transiently)
-    max_attempts = 3
-    delay = 1.0
-    last_exc = None
+    """
+    Upload one file using Canvas' multi-step flow with your CanvasAPI wrapper.
 
-    for attempt in range(1, max_attempts + 1):
-        # Step 1: Initialize upload via API
-        init_json = canvas.begin_course_file_upload(
-            course_id=course_id,
-            name=file_path.name,
-            parent_folder_path=folder_path,
-            on_duplicate=on_duplicate,
+    Supports:
+      - S3-style multipart form POST (classic)
+      - InstFS JSON handshake → PUT raw bytes (inscloudgate/inst-fs)
+
+    Returns:
+        New Canvas file ID (int).
+    """
+    if not file_path.exists():
+        raise FileNotFoundError(f"Missing exported file: {file_path}")
+
+    # Step 1: Initialize upload via API
+    init_json = canvas.begin_course_file_upload(
+        course_id=course_id,
+        name=file_path.name,
+        parent_folder_path=folder_path,
+        on_duplicate=on_duplicate,
+    )
+
+    upload_url = init_json["upload_url"]
+    upload_params = init_json.get("upload_params", {}) or {}
+    method_hint = (init_json.get("http_method") or init_json.get("method") or "POST").upper()
+
+    # ---- Case A: InstFS JSON-handshake flow --------------------------------
+    if _looks_like_instfs(upload_url, upload_params):
+        logger.debug(
+            "InstFS JSON handshake detected url=%s params_keys=%s",
+            upload_url,
+            sorted(upload_params.keys()),
         )
-        upload_url = init_json.get("upload_url")
-        upload_params = dict(init_json.get("upload_params", {}))  # copy so we can add safe defaults
 
-        # Fill common params if exporter/instance didn’t provide them
-        ctype, _ = mimetypes.guess_type(file_path.name)
-        if "filename" not in upload_params:
-            upload_params["filename"] = file_path.name
-        if "content_type" not in upload_params and ctype:
-            upload_params["content_type"] = ctype
-        if "size" not in upload_params:
-            try:
-                upload_params["size"] = file_path.stat().st_size
-            except Exception:
-                pass
+        # 2a) JSON handshake (no file yet)
+        h = canvas.session.post(upload_url, json=upload_params, timeout=(5, 60))
+        h.raise_for_status()
+        hj = _safe_json(h)
 
-        if not upload_url:
-            raise RuntimeError("Upload handshake missing upload_url")
+        next_method = (hj.get("http_method") or hj.get("method") or "PUT").upper()
+        next_url = hj.get("upload_url") or hj.get("location") or h.headers.get("Location")
+        next_headers = hj.get("headers") or {}
 
-        redacted = _redact_token(str(upload_url))
-        logger.debug("upload attempt=%d url=%s params_keys=%s",
-                     attempt, redacted, sorted(upload_params.keys()))
+        # Some deployments may return the final attachment right away
+        if not next_url:
+            new_id = _extract_new_file_id(hj)
+            if new_id is not None:
+                return new_id
+            logger.debug("Unexpected InstFS handshake response: %s", hj)
+            raise RuntimeError("InstFS handshake did not provide next upload URL")
 
-        # Step 2: multipart POST to the upload host
-        try:
-            with open(file_path, "rb") as fh:
-                up = canvas._multipart_post(
-                    str(upload_url),
-                    data=upload_params,
-                    files={"file": (file_path.name, fh)},
-                )
-        except requests.HTTPError as e:
-            status = getattr(e.response, "status_code", None)
-            body = ""
-            try:
-                body = (e.response.text or "")[:500]
-            except Exception:
-                pass
-            logger.warning(
-                "upload HTTP error attempt=%d status=%s url=%s body=%r",
-                attempt, status, redacted, body
+        # 2b) Send the bytes according to server instruction
+        if next_method == "PUT":
+            # PUT raw bytes; set Content-Type from provided hints
+            ct = (
+                upload_params.get("content_type")
+                or next_headers.get("Content-Type")
+                or "application/octet-stream"
             )
-            last_exc = e
-            # Retry only for 5xx/timeout; else bail
-            if status and 500 <= status < 600 and attempt < max_attempts:
-                time.sleep(delay)
-                delay *= 2
-                continue
-            raise
+            hdrs = canvas.session.headers.copy()
+            # keep auth header; merge additional headers (sans content-type to avoid duplicates)
+            for k, v in next_headers.items():
+                if k.lower() != "content-type":
+                    hdrs[k] = v
+            hdrs["Content-Type"] = ct
 
-        # Step 3: finalize/parse payload
-        if 300 <= up.status_code < 400 and "Location" in up.headers:
-            finalize_url = up.headers["Location"]
-            red_final = _redact_token(finalize_url)
-            logger.debug("following finalize redirect to %s", red_final)
-            finalize = canvas.session.get(finalize_url)
-            finalize.raise_for_status()
-            try:
-                payload: Any = finalize.json()
-            except ValueError:
-                payload = {}
+            with open(file_path, "rb") as fh:
+                put = canvas.session.put(next_url, data=fh, headers=hdrs, timeout=(5, 60))
+
+            # Finalize / parse
+            if 300 <= put.status_code < 400 and "Location" in put.headers:
+                fin = canvas.session.get(put.headers["Location"], timeout=(5, 60))
+                fin.raise_for_status()
+                payload = _safe_json(fin)
+            else:
+                put.raise_for_status()
+                payload = _safe_json(put)
+
         else:
-            try:
-                payload = up.json()
-            except ValueError:
-                payload = {}
+            # Fallback: server asks for another POST (sometimes with upload_params + file)
+            with open(file_path, "rb") as fh:
+                post2 = canvas.session.post(
+                    next_url,
+                    data=hj.get("upload_params") or {},
+                    files={"file": (file_path.name, fh)},
+                    headers={k: v for k, v in next_headers.items() if k.lower() != "content-type"},
+                    timeout=(5, 60),
+                )
+
+            if 300 <= post2.status_code < 400 and "Location" in post2.headers:
+                fin = canvas.session.get(post2.headers["Location"], timeout=(5, 60))
+                fin.raise_for_status()
+                payload = _safe_json(fin)
+            else:
+                post2.raise_for_status()
+                payload = _safe_json(post2)
 
         new_id = _extract_new_file_id(payload)
         if new_id is not None:
             return new_id
 
-        logger.warning("upload attempt=%d returned unexpected payload; will%s retry. payload_keys=%s",
-                       attempt, " not" if attempt >= max_attempts else "",
-                       list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__)
+        logger.debug("Unexpected upload response payload (InstFS): %s", payload)
+        raise RuntimeError("InstFS upload did not return a file id")
 
-        last_exc = RuntimeError("Canvas upload did not return a file id")
-        if attempt < max_attempts:
-            time.sleep(delay)
-            delay *= 2
+    # ---- Case B: S3-style multipart POST (classic) --------------------------
+    # Some initializers include method=POST and S3 fields (policy/signature/etc.)
+    logger.debug(
+        "S3-style multipart flow url=%s params_keys=%s method_hint=%s",
+        upload_url,
+        sorted(upload_params.keys()),
+        method_hint,
+    )
 
-    # If we exit the loop, raise the last thing we saw
-    if isinstance(last_exc, Exception):
-        raise last_exc
-    raise RuntimeError("upload failed without exception")
+    with open(file_path, "rb") as fh:
+        up = canvas._multipart_post(
+            str(upload_url),
+            data=upload_params,
+            files={"file": (file_path.name, fh)},
+        )
+
+    # Finalize or parse direct response
+    if 300 <= up.status_code < 400 and "Location" in up.headers:
+        finalize_url = up.headers["Location"]
+        finalize = canvas.session.get(finalize_url, timeout=(5, 60))
+        finalize.raise_for_status()
+        payload: Any = _safe_json(finalize)
+    else:
+        up.raise_for_status()
+        payload = _safe_json(up)
+
+    new_id = _extract_new_file_id(payload)
+    if new_id is not None:
+        return new_id
+
+    logger.debug("Unexpected upload response payload (S3/multipart): %s", payload)
+    raise RuntimeError("Canvas upload did not return a file id")
