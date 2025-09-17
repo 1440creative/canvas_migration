@@ -40,6 +40,7 @@ ALL_STEPS = [
     "announcements",
     "modules",
     "course",
+    "blueprint",
 ]
 
 
@@ -93,6 +94,8 @@ def main() -> int:
                 counts[name] = len(metas)
             elif name == "course":
                 export_course_settings(cid, root, source_api)
+                counts[name] = 1
+            elif name == "blueprint":
                 export_blueprint_settings(cid, root, source_api)
                 counts[name] = 1
             else:
