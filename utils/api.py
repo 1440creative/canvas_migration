@@ -6,6 +6,8 @@ import time
 import requests
 import logging
 import random
+import sys
+from pathlib import Path
 from typing import Dict, Any, Optional, Union, List
 from urllib.parse import urljoin
 
