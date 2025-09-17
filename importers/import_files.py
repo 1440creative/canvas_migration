@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import os
 from typing import Dict, Any, Protocol, Optional
 
 import requests
@@ -305,9 +306,12 @@ def _upload_file_via_canvas_api(
     upload_url = init_json["upload_url"]
     upload_params = init_json.get("upload_params", {}) or {}
     method_hint = (init_json.get("http_method") or init_json.get("method") or "POST").upper()
+    # Allow forcing InstFS branch via env (useful for debugging odd hosts)
+    force_instfs = os.getenv("CANVAS_FORCE_INSTFS") == "1"
+    is_instfs = force_instfs or _looks_like_instfs(upload_url, upload_params)
 
     # ---- Case A: InstFS JSON-handshake flow --------------------------------
-    if _looks_like_instfs(upload_url, upload_params):
+    if is_instfs:
         logger.debug(
             "InstFS JSON handshake detected url=%s params_keys=%s",
             upload_url,
@@ -318,6 +322,28 @@ def _upload_file_via_canvas_api(
         h = canvas.session.post(upload_url, json=upload_params, timeout=(5, 60))
         h.raise_for_status()
         hj = _safe_json(h)
+        
+        # Retry InstFS on transient 5xx
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            logger.debug("upload attempt=%s url=%s params_keys=%s",
+                         attempt, upload_url, sorted(upload_params.keys()))
+            try:
+                # 2a) JSON handshake (no file yet)
+                h = canvas.session.post(upload_url, json=upload_params, timeout=(5, 60))
+                h.raise_for_status()
+                hj = _safe_json(h)
+                
+                # if everything succeeded:
+                return new_id
+            except requests.HTTPError as e:
+                status = getattr(e.response, "status_code", None)
+                if status and status >= 500 and attempt < max_attempts:
+                    body = (e.response.text[:200] if getattr(e, "response", None) is not None else "")
+                    logger.warning("upload HTTP error attempt=%s status=%s url=%s body=%r",
+                                   attempt, status, upload_url, body)
+                    continue
+                raise
 
         next_method = (hj.get("http_method") or hj.get("method") or "PUT").upper()
         next_url = hj.get("upload_url") or hj.get("location") or h.headers.get("Location")
@@ -399,6 +425,26 @@ def _upload_file_via_canvas_api(
             data=upload_params,
             files={"file": (file_path.name, fh)},
         )
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        logger.debug("upload attempt=%s url=%s params_keys=%s",
+                     attempt, upload_url, sorted(upload_params.keys()))
+        try:
+            with open(file_path, "rb") as fh:
+                up = canvas._multipart_post(
+                    str(upload_url),
+                    data=upload_params,
+                    files={"file": (file_path.name, fh)},
+                )
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            if status and status >= 500 and attempt < max_attempts:
+                body = (e.response.text[:200] if getattr(e, "response", None) is not None else "")
+                logger.warning("upload HTTP error attempt=%s status=%s url=%s body=%r",
+                               attempt, status, upload_url, body)
+                continue
+            raise
+        break  # success; proceed to finalize/parse
 
     # Finalize or parse direct response
     if 300 <= up.status_code < 400 and "Location" in up.headers:
