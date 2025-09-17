@@ -80,3 +80,6 @@ docs/structure/*
 
 # Scratch state
 id_map.json
+.env
+.env.local
+.env.*.local
