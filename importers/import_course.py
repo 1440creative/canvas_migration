@@ -9,7 +9,7 @@ import requests
 from logging_setup import get_logger
 
 # Import steps supported by the importer 
-ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "course"]
+ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "rubrics", "course"]
 
 
 class CanvasLike(Protocol):
@@ -62,6 +62,7 @@ def scan_export(export_root: Path) -> Dict[str, int]:
     counts["quizzes"] = len(list((export_root / "quizzes").rglob("quiz_metadata.json")))
     counts["files"] = len(list((export_root / "files").rglob("*.metadata.json")))
     counts["discussions"] = len(list((export_root / "discussions").rglob("discussion_metadata.json")))
+    counts["rubrics"] = 1 if (export_root / "rubrics" / "rubrics.json").exists() else 0
     mod_file = export_root / "modules" / "modules.json"
     if mod_file.exists():
         try:
@@ -99,6 +100,7 @@ def import_course(
     from importers.import_discussions import import_discussions
     from importers.import_modules import import_modules
     from importers.import_course_settings import import_course_settings
+    from importers.import_rubrics import import_rubrics
 
     id_map_path = id_map_path or (export_root / "id_map.json")
     id_map: Dict[str, Dict[Any, Any]] = load_id_map(id_map_path)
@@ -133,6 +135,9 @@ def import_course(
 
             elif step == "modules":
                 import_modules(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
+                save_id_map(id_map_path, id_map)
+            elif step == "rubrics":
+                import_rubrics(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
                 save_id_map(id_map_path, id_map)
 
             elif step == "course":

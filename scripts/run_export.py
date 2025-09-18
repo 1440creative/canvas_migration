@@ -30,6 +30,7 @@ from export.export_files import export_files
 from export.export_settings import export_course_settings
 from export.export_blueprint_settings import export_blueprint_settings
 from export.export_home import export_home
+from export.export_rubrics import export_rubrics
 
 
 ALL_STEPS = [
@@ -40,6 +41,7 @@ ALL_STEPS = [
     "discussions",
     "announcements",
     "modules",
+    "rubrics",
     "course",
 ]
 
@@ -91,6 +93,9 @@ def main() -> int:
                 counts[name] = len(metas)
             elif name == "modules":
                 metas = export_modules(cid, root, source_api)
+                counts[name] = len(metas)
+            elif name == "rubrics":
+                metas = export_rubrics(cid, root, source_api)
                 counts[name] = len(metas)
             elif name == "course":
                 export_course_settings(cid, root, source_api)
