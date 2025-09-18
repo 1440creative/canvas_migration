@@ -8,6 +8,30 @@ from logging_setup import get_logger
 from utils.api import CanvasAPI
 from utils.fs import ensure_dir, atomic_write, json_dumps_stable
 
+def _write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    
+def export_syllabus(course_id: int, export_root: Path, api) -> bool:
+    """
+    Fetch syllabus HTML and write it to course/syllabus.html
+    Return True if written, otherwise False
+    """
+    log = get_logger(artifact="syllabus_export", course_id=course_id)
+    
+    #ensure syllabus body included
+    course = api.get(f"/api/v1/courses/{course_id}", params={"include[]": "syllabus_body"})
+    html = (course or {}).get(course_id) / "course" / "syllabus.html"
+    
+    out = export_root / str(course_id) / "course" / "syllabus.html"
+    if html.strip():
+        _write_text(out, html)
+        log.info("Wrote syllabus HTML", extra={"path": str(out), "bytes": len(html.encode('utf-8'))})
+        return True
+    else:
+        #no html
+        log.debug("No syllabus HTML present; nothing written")
+        return False
 
 def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) -> Dict[str, Any]:
     """
@@ -50,6 +74,14 @@ def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) ->
         raise TypeError("Expected settings dict from Canvas API")
 
     atomic_write(out_dir / "course_settings.json", json_dumps_stable(settings))
+    
+    #syllabus html
+    try:
+        export_syllabus(course_id, export_root, api)
+    except Exception as e:
+        log = get_logger(artifact="syllabus_export", course_id=course_id)
+        log.warning("Failed to export syllabus: %s", e)
+
 
     log.info("exported course info + settings", extra={"is_blueprint": metadata["is_blueprint"]})
     return {"is_blueprint": metadata["is_blueprint"]}
