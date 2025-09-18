@@ -43,6 +43,7 @@ ALL_STEPS = [
     "announcements",
     "modules",
     "rubrics",
+    "syllabus",
     "course",
 ]
 
@@ -98,10 +99,7 @@ def main() -> int:
             elif name == "rubrics":
                 metas = export_rubrics(cid, root, source_api)
                 counts[name] = len(metas)
-            elif name == "syllabus":
-                from export.export_syllabus import export_syllabus
-                export_syllabus(cid, root, source_api)
-                counts[name] = 1
+            
             elif name == "course":
                 export_course_settings(cid, root, source_api)
                 export_blueprint_settings(cid, root, source_api)
