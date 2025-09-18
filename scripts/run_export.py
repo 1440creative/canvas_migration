@@ -31,6 +31,7 @@ from export.export_settings import export_course_settings
 from export.export_blueprint_settings import export_blueprint_settings
 from export.export_home import export_home
 from export.export_rubrics import export_rubrics
+from export.export_syllabus import export_syllabus
 
 
 ALL_STEPS = [
@@ -101,6 +102,7 @@ def main() -> int:
                 export_course_settings(cid, root, source_api)
                 export_blueprint_settings(cid, root, source_api)
                 export_home(cid, root, source_api)
+                export_syllabus(cid, root, source_api)
                 counts[name] = 1
             else:
                 raise ValueError(f"unknown step: {name}")
