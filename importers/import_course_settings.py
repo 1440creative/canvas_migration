@@ -139,7 +139,7 @@ def import_course_settings(
         log.error("Failed to update course fields: %s %s", resp.status_code, resp.text[:600])
         raise
     
-     #import syllabus html
+    #import syllabus html
     try:
         import_syllabus_html(target_course_id=target_course_id, export_root=export_root, canvas=canvas)
     except Exception as e:
