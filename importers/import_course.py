@@ -62,7 +62,7 @@ def scan_export(export_root: Path) -> Dict[str, int]:
     counts["quizzes"] = len(list((export_root / "quizzes").rglob("quiz_metadata.json")))
     counts["files"] = len(list((export_root / "files").rglob("*.metadata.json")))
     counts["discussions"] = len(list((export_root / "discussions").rglob("discussion_metadata.json")))
-    counts["rubrics"] = 1 if (export_root / "rubrics" / "rubrics.json").exists() else 0
+    counts["rubrics"] = len(list((export_root / "rubrics").glob("rubric_*.json")))
     mod_file = export_root / "modules" / "modules.json"
     if mod_file.exists():
         try:
