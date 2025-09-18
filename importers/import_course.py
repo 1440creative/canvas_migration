@@ -136,7 +136,12 @@ def import_course(
                 save_id_map(id_map_path, id_map)
 
             elif step == "course":
-                import_course_settings(target_course_id=target_course_id, export_root=export_root, canvas=canvas)
+                import_course_settings(
+                    target_course_id=target_course_id, 
+                    export_root=export_root, 
+                    canvas=canvas,
+                    id_map=id_map,
+                )
 
             else:
                 log.warning("Unknown step '%s' — skipping", step)
