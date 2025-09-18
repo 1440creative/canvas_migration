@@ -3,106 +3,101 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
+import requests
 from logging_setup import get_logger
 
+# A conservative allowlist of course fields Canvas accepts on update.
+# (Anything else gets ignored rather than 4xx’ing your request.)
+_ALLOWED_FIELDS = {
+    "name",
+    "course_code",
+    "start_at",
+    "end_at",
+    "is_public",
+    "is_public_to_auth_users",
+    "public_syllabus",
+    "public_syllabus_to_auth",
+    "public_description",
+    "allow_student_wiki_edits",
+    "allow_wiki_comments",
+    "open_enrollment",
+    "self_enrollment",
+    "restrict_enrollments_to_course_dates",
+    "term_id",
+    "license",
+    "default_view",
+    "time_zone",
+    "grading_standard_id",
+    "hide_final_grades",
+    "apply_assignment_group_weights",
+    "blueprint",  # harmless pass-through; ignored since we won't set it
+}
 
 def _read_json(p: Path) -> Dict[str, Any]:
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-    return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
+def _filter_course_fields(obj: Dict[str, Any]) -> Dict[str, Any]:
+    # Accept either {"course": {...}} or a flat dict exported earlier
+    payload = obj.get("course", obj) if isinstance(obj, dict) else {}
+    return {k: v for k, v in payload.items() if k in _allowed()}
 
-def _filter_course_fields(meta: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Keep only fields that are commonly updatable on the /courses/:id endpoint.
-    (Tests only assert that a PUT to /courses/{id} happens; not strict on keys.)
-    """
-    allowed = {
-        "name",
-        "course_code",
-        "syllabus_body",
-        "start_at",
-        "end_at",
-        "is_public",
-        "license",
-        "time_zone",
-        "grading_standard_id",
-        "workflow_state",
-        "term_id",
-    }
-    return {k: v for k, v in meta.items() if k in allowed}
-
-
-def _choose_blueprint_template_fragment(meta: Dict[str, Any]) -> str:
-    """
-    Return the template path fragment: either an ID like '1234' or 'default'.
-    """
-    tpl = (meta.get("template") or {})
-    tid = tpl.get("id")
-    if isinstance(tid, int) and tid > 0:
-        return str(tid)
-    return "default"
-
+def _allowed() -> set[str]:
+    return set(_ALLOWED_FIELDS)
 
 def import_course_settings(
     *,
     target_course_id: int,
     export_root: Path,
-    canvas,  # CanvasAPI-like (DummyCanvas in tests)
-    queue_blueprint_sync: bool = False,
+    canvas,
 ) -> None:
     """
-    Import course settings + course metadata and (optionally) queue a Blueprint sync.
-    - PUT /courses/:id/settings   with the contents of course/settings.json
-    - PUT /courses/:id            with {"course": <filtered fields from course_metadata.json>}
-    - POST /courses/:id/blueprint_templates/{id|default}/migrations  when requested
+    Import core course settings only.
+    Note: Blueprint enablement is manual in Canvas UI; importer does not touch it.
     """
     log = get_logger(artifact="course_settings", course_id=target_course_id)
+
     course_dir = export_root / "course"
-    bp_dir = export_root / "blueprint"
+    # Accept either name (your export has "course_settings.json")
+    candidates = [
+        course_dir / "settings.json",
+        course_dir / "course_settings.json",
+    ]
 
-    # 1) Apply settings.json to /courses/:id/settings
-    settings_path = course_dir / "settings.json"
-    settings = _read_json(settings_path)
-    if settings:
-        try:
-            endpoint = f"/api/v1/courses/{target_course_id}/settings"
-            log.debug("PUT settings", extra={"endpoint": endpoint, "keys": list(settings.keys())})
-            canvas.put(endpoint, json=settings)  # NOTE: plain settings payload (no "course" wrapper)
-        except Exception as e:
-            log.error("Failed to apply course settings: %s", e)
-    else:
+    settings: Dict[str, Any] = {}
+    used_path: Path | None = None
+    for p in candidates:
+        if p.exists():
+            settings = _read_json(p)
+            used_path = p
+            break
+
+    if not settings:
         log.debug("No settings.json found; skipping settings update")
+        log.info("Course settings import complete")
+        return
 
-    # 2) Apply course_metadata.json to /courses/:id
-    meta_path = course_dir / "course_metadata.json"
-    meta = _read_json(meta_path)
-    course_fields = _filter_course_fields(meta)
-    if course_fields:
-        try:
-            endpoint = f"/api/v1/courses/{target_course_id}"
-            payload = {"course": course_fields}
-            log.debug("PUT course fields", extra={"endpoint": endpoint, "keys": list(course_fields.keys())})
-            canvas.put(endpoint, json=payload)
-        except Exception as e:
-            log.error("Failed to update course fields: %s", e)
-    else:
-        log.debug("No updatable course fields present in course_metadata.json; skipping course update")
+    update = {"course": _filter_course_fields(settings)}
+    if not update["course"]:
+        log.debug("No allowed course fields to update; skipping PUT")
+        log.info("Course settings import complete")
+        return
 
-    # 3) Optionally queue a Blueprint sync
-    if queue_blueprint_sync:
-        try:
-            bp_meta = _read_json(bp_dir / "blueprint_metadata.json")
-            frag = _choose_blueprint_template_fragment(bp_meta)  # id or "default"
-            endpoint = f"/api/v1/courses/{target_course_id}/blueprint_templates/{frag}/migrations"
-            log.debug("POST blueprint sync", extra={"endpoint": endpoint})
-            canvas.post(endpoint, json={})
-        except Exception as e:
-            log.error("Failed to queue Blueprint sync: %s", e)
+    log.debug(
+        "PUT course fields",
+        extra={"used": str(used_path), "keys": sorted(update["course"].keys())},
+    )
+
+    resp = canvas.put(f"/api/v1/courses/{target_course_id}", json=update)
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError:
+        # Helpful diagnostics
+        log.error("Failed to update course fields: %s %s", resp.status_code, resp.text[:600])
+        raise
 
     log.info("Course settings import complete")
