@@ -62,7 +62,17 @@ def scan_export(export_root: Path) -> Dict[str, int]:
     counts["quizzes"] = len(list((export_root / "quizzes").rglob("quiz_metadata.json")))
     counts["files"] = len(list((export_root / "files").rglob("*.metadata.json")))
     counts["discussions"] = len(list((export_root / "discussions").rglob("discussion_metadata.json")))
-    counts["rubrics"] = len(list((export_root / "rubrics").glob("rubric_*.json")))
+    
+    #rubrics: prefer export_root/rubrics - if not present,  look for export_root/<id>/rubrics
+    rubrics_dir = export_root / "rubrics"
+    if not rubrics_dir.exists():
+        try:
+            subdirs = [d for d in export_root.iterdir() if d.is_dir() and d.name.isdigit()]
+            if len(subdirs) == 1:
+                rubrics_dir = subdirs[0] / "rubrics"
+        except Exception:
+            pass
+    counts["rubrics"] = len(list(rubrics_dir.glob("rubric_*.json"))) if rubrics_dir.exists() else 0
     mod_file = export_root / "modules" / "modules.json"
     if mod_file.exists():
         try:
@@ -136,9 +146,10 @@ def import_course(
             elif step == "modules":
                 import_modules(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
                 save_id_map(id_map_path, id_map)
+                
             elif step == "rubrics":
-                import_rubrics(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
-                save_id_map(id_map_path, id_map)
+                # Rubrics don’t use id_map; create course-level (bookmark) rubrics
+                import_rubrics(target_course_id=target_course_id, export_root=export_root, canvas=canvas)
 
             elif step == "course":
                 import_course_settings(

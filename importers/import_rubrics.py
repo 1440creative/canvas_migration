@@ -2,160 +2,273 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import requests
 from logging_setup import get_logger
+from utils.api import DEFAULT_TIMEOUT
 
 
-def _pick_rubrics_dir(export_root: Path) -> Optional[Path]:
-    """Prefer <course>/rubrics, but fall back to legacy ../rubrics if present."""
-    rubrics_dir = export_root / "rubrics"
-    if rubrics_dir.exists():
-        return rubrics_dir
-    # backward-compat: if export_root looks like .../<course_id>, check parent/rubrics
-    if export_root.name.isdigit():
-        legacy = export_root.parent / "rubrics"
-        if legacy.exists():
-            return legacy
-    return None
+__all__ = ["import_rubrics"]
 
 
-def _coerce_criteria(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+class CanvasLikeProtocol:
+    api_root: str
+    session: requests.Session
+    def get(self, endpoint: str, **kwargs) -> Any: ...
+    def post(self, endpoint: str, **kwargs) -> requests.Response: ...
+    def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Dict[str, Any]: ...
+
+
+def _read_json(p: Path) -> dict:
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _as_bool(v: Any, default: bool = False) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    if isinstance(v, str):
+        return v.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def _normalize_criteria(raw: Any) -> List[dict]:
     """
-    Best-effort extraction of Canvas rubric criteria structure from the exported object.
-    Accepts a variety of shapes (top-level 'criteria', nested under 'data'/'rubric', etc.).
+    Accept a few shapes and normalize to Canvas rubric criteria list:
+    Each criterion: {description, long_description, points, ratings:[{description,points}]}
     """
-    candidates = [
-        payload.get("criteria"),
-        payload.get("data", {}).get("criteria") if isinstance(payload.get("data"), dict) else None,
-        payload.get("rubric", {}).get("criteria") if isinstance(payload.get("rubric"), dict) else None,
-    ]
-    for c in candidates:
-        if isinstance(c, list):
-            return c
+    if not isinstance(raw, list):
+        return []
+    out: List[dict] = []
+    for i, c in enumerate(raw):
+        if not isinstance(c, dict):
+            continue
+        desc = c.get("description") or c.get("title") or f"Criterion {i+1}"
+        long_desc = c.get("long_description") or c.get("longDescription") or ""
+        try:
+            points = float(c.get("points")) if c.get("points") is not None else None
+        except Exception:
+            points = None
 
-    # Some tenants return 'data' as a list of criteria directly
-    if isinstance(payload.get("data"), list):
-        return payload["data"]
+        ratings = []
+        raw_ratings = c.get("ratings") or []
+        if isinstance(raw_ratings, list) and raw_ratings:
+            for r in raw_ratings:
+                if not isinstance(r, dict):
+                    continue
+                r_desc = r.get("description") or r.get("title") or ""
+                try:
+                    r_pts = float(r.get("points")) if r.get("points") is not None else None
+                except Exception:
+                    r_pts = None
+                if r_pts is None:
+                    continue
+                ratings.append({"description": r_desc, "points": r_pts})
 
-    return []
+        # Guarantee at least one rating
+        if not ratings:
+            # If total points is missing, default to 0..1
+            base_pts = 1.0 if points is None else points
+            ratings = [{"description": "Full Marks", "points": base_pts}]
+
+        # If 'points' is missing at the criterion level, set it to max rating
+        if points is None:
+            points = max((r["points"] for r in ratings), default=1.0)
+
+        out.append(
+            {
+                "description": str(desc),
+                "long_description": str(long_desc or ""),
+                "points": float(points),
+                "ratings": ratings,
+            }
+        )
+    return out
 
 
-def _extract_title(payload: Dict[str, Any]) -> str:
-    for k in ("title", "name", "rubric_title"):
-        v = payload.get(k)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    # try nested
-    rub = payload.get("rubric") or payload.get("data") or {}
-    if isinstance(rub, dict):
-        for k in ("title", "name"):
-            v = rub.get(k)
-            if isinstance(v, str) and v.strip():
-                return v.strip()
-    return "Imported Rubric"
+def _form_payload_from_rubric(
+    *,
+    rubric: dict,
+    course_id: int,
+) -> Dict[str, str]:
+    """
+    Canvas' rubrics create endpoint is happiest with form-encoded bracketed keys.
+    This builds a payload like:
+      rubric[title], rubric[free_form_criterion_comments]
+      rubric[criteria][0][description], [long_description], [points]
+      rubric[criteria][0][ratings][0][description], [points]
+      rubric_association[association_type], [association_id], [use_for_grading], [purpose]
+    """
+    title = rubric.get("title") or rubric.get("name") or "Imported Rubric"
+    free_form = _as_bool(rubric.get("free_form_criterion_comments"), False)
+    criteria = _normalize_criteria(rubric.get("criteria") or rubric.get("data") or [])
+
+    form: Dict[str, str] = {
+        "rubric[title]": str(title),
+        "rubric[free_form_criterion_comments]": "1" if free_form else "0",
+        # Create it as a course-level rubric (bookmark). Instructors can attach later.
+        "rubric_association[association_type]": "Course",
+        "rubric_association[association_id]": str(course_id),
+        "rubric_association[use_for_grading]": "0",
+        "rubric_association[purpose]": "bookmark",
+    }
+
+    for i, c in enumerate(criteria):
+        prefix = f"rubric[criteria][{i}]"
+        form[f"{prefix}[description]"] = c["description"]
+        form[f"{prefix}[long_description]"] = c.get("long_description", "") or ""
+        form[f"{prefix}[points]"] = str(c["points"])
+        # Optional: set a local id so Canvas doesn't choke on repeats
+        form[f"{prefix}[id]"] = f"crit_{i+1}"
+        # Ratings
+        for j, r in enumerate(c.get("ratings", []) or []):
+            rkey = f"{prefix}[ratings][{j}]"
+            form[f"{rkey}[description]"] = r.get("description", "") or ""
+            form[f"{rkey}[points]"] = str(r["points"])
+
+    return form
 
 
-def _extract_points_possible(payload: Dict[str, Any]) -> Optional[float]:
-    for k in ("points_possible", "total_points"):
-        v = payload.get(k)
-        if isinstance(v, (int, float)):
-            return float(v)
-    rub = payload.get("rubric")
-    if isinstance(rub, dict):
-        for k in ("points_possible", "total_points"):
-            v = rub.get(k)
-            if isinstance(v, (int, float)):
-                return float(v)
-    return None
+def _json_payload_from_rubric(*, rubric: dict, course_id: int) -> Dict[str, Any]:
+    title = rubric.get("title") or rubric.get("name") or "Imported Rubric"
+    free_form = _as_bool(rubric.get("free_form_criterion_comments"), False)
+    criteria = _normalize_criteria(rubric.get("criteria") or rubric.get("data") or [])
+    return {
+        "rubric": {
+            "title": title,
+            "free_form_criterion_comments": free_form,
+            "criteria": criteria,
+        },
+        "rubric_association": {
+            "association_type": "Course",
+            "association_id": int(course_id),
+            "use_for_grading": False,
+            "purpose": "bookmark",
+        },
+    }
+
+
+def _list_existing_titles(canvas: CanvasLikeProtocol, course_id: int) -> set[str]:
+    titles: set[str] = set()
+    try:
+        rubs = canvas.get(f"/api/v1/courses/{course_id}/rubrics")
+        if isinstance(rubs, list):
+            for r in rubs:
+                t = r.get("title") or r.get("name")
+                if t:
+                    titles.add(str(t))
+    except Exception:
+        pass
+    return titles
 
 
 def import_rubrics(
     *,
     target_course_id: int,
     export_root: Path,
-    canvas,
-    id_map: Dict[str, Dict[int, int]],
+    canvas: CanvasLikeProtocol,
+    verbosity: int = 1,
 ) -> None:
     """
-    Create rubrics in the TARGET course from exported rubric JSON files.
-
-    - Reads: <export_root>/rubrics/rubric_<id>.json
-    - Writes: id_map["rubrics"][old_id] = new_id
+    Import rubrics from export_root/<course_id>/rubrics/*.json
+    Creates course-level (bookmark) rubrics in the target course.
     """
     log = get_logger(artifact="rubrics_import", course_id=target_course_id)
 
-    rubrics_dir = _pick_rubrics_dir(export_root)
-    if not rubrics_dir:
-        log.info("No rubrics directory found (nothing to import).")
+    # Find the course folder under export_root:
+    # - If export_root is .../<course_id>, use it
+    # - Else, if there is a single numeric child, use that
+    course_dir = export_root
+    if not (export_root / "rubrics").exists():
+        # try nested structure export_root/<id>/
+        try:
+            subdirs = [d for d in export_root.iterdir() if d.is_dir() and re.match(r"^\d+$", d.name)]
+            if len(subdirs) == 1:
+                course_dir = subdirs[0]
+        except Exception:
+            pass
+
+    rubrics_dir = course_dir / "rubrics"
+    if not rubrics_dir.exists():
+        log.info("No rubrics directory at %s (nothing to import)", rubrics_dir)
         return
 
     files = sorted(rubrics_dir.glob("rubric_*.json"))
     if not files:
-        log.info("Rubrics directory is empty (nothing to import).")
+        log.info("No rubric_*.json files in %s (nothing to import)", rubrics_dir)
         return
 
-    rmap: Dict[int, int] = id_map.setdefault("rubrics", {})
+    existing_titles = _list_existing_titles(canvas, target_course_id)
+
     created = 0
     failed = 0
 
     for jf in files:
-        try:
-            blob = json.loads(jf.read_text(encoding="utf-8"))
-        except Exception as e:
-            failed += 1
-            log.warning("Skipping unreadable rubric file %s: %s", jf, e)
+        data = _read_json(jf)
+        if not data:
+            log.warning("Skipping unreadable rubric file: %s", jf)
             continue
 
-        raw = blob.get("rubric") if isinstance(blob, dict) else blob
-        if not isinstance(raw, dict):
-            failed += 1
-            log.warning("Malformed rubric json in %s (expected object)", jf)
+        # Typical export stored the raw Canvas rubric under "rubric" or "data"
+        rubric = data.get("rubric") if isinstance(data.get("rubric"), dict) else data
+        title = rubric.get("title") or rubric.get("name") or jf.stem
+
+        if title in existing_titles:
+            log.info("Rubric with title %r already exists; skipping", title)
             continue
 
-        old_id = raw.get("id")
-        title = _extract_title(raw)
-        criteria = _coerce_criteria(raw)
-        points_possible = _extract_points_possible(raw)
+        # 1) Try form-encoded (Canvas’ preferred shape for this endpoint)
+        form = _form_payload_from_rubric(rubric=rubric, course_id=target_course_id)
+        url = f"{canvas.api_root.rstrip('/')}/courses/{target_course_id}/rubrics"
 
-        payload: Dict[str, Any] = {
-            "rubric": {
-                "title": title,
-                # Canvas will recalc from criteria if omitted; pass when we have it
-                **({"points_possible": points_possible} if points_possible is not None else {}),
-                # Allow free-form comments if the source had it; default False otherwise
-                "free_form_criterion_comments": bool(
-                    raw.get("free_form_criterion_comments")
-                    or (raw.get("rubric") or {}).get("free_form_criterion_comments")
-                ),
-                "criteria": criteria or [],
-            },
-            # Optional: immediately associate to the course (non-grading association)
-            "rubric_association": {
-                "association_type": "Course",
-                "association_id": target_course_id,
-                "use_for_grading": False,
-            },
-        }
+        headers = canvas.session.headers.copy()
+        # IMPORTANT: do NOT send JSON content type for form data
+        headers.pop("Content-Type", None)
 
         try:
-            # POST returns the created rubric JSON (or the association). Use your wrapper.
-            res = canvas.post_json(f"/api/v1/courses/{target_course_id}/rubrics", payload=payload)
-            new_id = (
-                (res.get("id") if isinstance(res, dict) else None)
-                or (res.get("rubric", {}).get("id") if isinstance(res, dict) else None)
-            )
-            if not isinstance(new_id, int):
-                raise RuntimeError(f"Create rubric returned no id; response keys={list(res) if isinstance(res, dict) else type(res)}")
-
-            if isinstance(old_id, int):
-                rmap[old_id] = int(new_id)
-
+            resp = canvas.session.post(url, data=form, headers=headers, timeout=DEFAULT_TIMEOUT)
+            if resp.status_code >= 400:
+                body = resp.text[:600]
+                log.warning("Rubric create (form) error status=%s body=%r", resp.status_code, body)
+            resp.raise_for_status()
             created += 1
-            log.info("Created rubric '%s' → new_id=%s", title, new_id)
+            existing_titles.add(title)
+            log.info("Created rubric (form): %s", title)
+            continue
+        except requests.HTTPError:
+            # Fall through to JSON attempt below after logging
+            pass
         except Exception as e:
-            failed += 1
-            log.exception("Failed to create rubric from %s: %s", jf.name, e)
+            log.exception("Rubric form submit failed for %s: %s", title, e)
 
-    log.info("Rubrics import complete. created=%d failed=%d total=%d", created, failed, created + failed)
+        # 2) Fallback to JSON
+        try:
+            payload = _json_payload_from_rubric(rubric=rubric, course_id=target_course_id)
+            res = canvas.post_json(f"/api/v1/courses/{target_course_id}/rubrics", payload=payload)
+            # if we got a dict back, assume success
+            created += 1
+            existing_titles.add(title)
+            log.info("Created rubric (json): %s", title)
+        except requests.HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            body = (e.response.text[:600] if getattr(e, "response", None) is not None else "")
+            log.error("Failed to create rubric from %s: %s %s", jf.name, status, body)
+            failed += 1
+        except Exception as e:
+            log.exception("Failed to create rubric from %s: %s", jf.name, e)
+            failed += 1
+
+    log.info(
+        "Rubrics import complete. created=%d failed=%d total=%d",
+        created,
+        failed,
+        len(files),
+    )
