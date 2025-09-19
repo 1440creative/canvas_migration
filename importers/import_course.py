@@ -9,7 +9,7 @@ import requests
 from logging_setup import get_logger
 
 # Import steps supported by the importer 
-ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "rubrics", "course"]
+ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "rubrics", "rubric_links", "course"]
 
 
 class CanvasLike(Protocol):
@@ -111,6 +111,8 @@ def import_course(
     from importers.import_modules import import_modules
     from importers.import_course_settings import import_course_settings
     from importers.import_rubrics import import_rubrics
+    from importers.import_rubric_links import import_rubric_links
+    
 
     id_map_path = id_map_path or (export_root / "id_map.json")
     id_map: Dict[str, Dict[Any, Any]] = load_id_map(id_map_path)
@@ -148,8 +150,13 @@ def import_course(
                 save_id_map(id_map_path, id_map)
                 
             elif step == "rubrics":
-                # Rubrics don’t use id_map; create course-level (bookmark) rubrics
+                
                 import_rubrics(target_course_id=target_course_id, export_root=export_root, canvas=canvas)
+                save_id_map(id_map_path, id_map)
+            
+            elif step == "rubric_links":
+                import_rubric_links(target_course_id=target_course_id, export_root=export_root, canvas=canvas)
+                save_id_map(id_map_path, id_map)
 
             elif step == "course":
                 import_course_settings(

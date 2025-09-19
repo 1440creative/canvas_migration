@@ -31,6 +31,7 @@ from export.export_settings import export_course_settings
 from export.export_blueprint_settings import export_blueprint_settings
 from export.export_home import export_home
 from export.export_rubrics import export_rubrics
+from export.export_rubric_links import export_rubric_links
 from export.export_syllabus import export_syllabus
 
 
@@ -43,6 +44,7 @@ ALL_STEPS = [
     "announcements",
     "modules",
     "rubrics",
+    "rubric_links",
     "syllabus",
     "course",
 ]
@@ -99,6 +101,9 @@ def main() -> int:
             elif name == "rubrics":
                 metas = export_rubrics(cid, root, source_api)
                 counts[name] = len(metas)
+            elif name == "rubric_links":
+                data = export_rubric_links(cid, root, source_api)
+                counts[name] = len(data)
             elif name == "syllabus":
                 export_syllabus(cid, root, source_api)
                 counts[name] = 1
@@ -107,6 +112,8 @@ def main() -> int:
                 export_blueprint_settings(cid, root, source_api)
                 export_home(cid, root, source_api)
                 export_syllabus(cid, root, source_api)
+                export_rubrics(cid, root, source_api)
+                export_rubric_links(cid, root, source_api)
                 counts[name] = 1
             else:
                 raise ValueError(f"unknown step: {name}")
