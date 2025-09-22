@@ -146,21 +146,41 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def load_importer(module_path: str, func_name: str | None = None):
+def load_importer(module_path=None, func_name=None, **kwargs):
     """
-    Dynamic import helper used by tests.
-
-    Some tests call load_importer(Path.cwd()) and expect it to load the
-    announcements importer by default. If func_name is omitted, default to
-    'import_announcements'. Other tests can still pass func_name explicitly
-    (e.g., 'import_pages', 'import_modules', etc.).
+    Flexible test helper:
+      - load_importer("importers.import_discussions", "import_discussions") -> returns function
+      - load_importer(module="importers.import_discussions", func="import_discussions") -> returns function
+      - load_importer(module="importers.import_discussions") -> returns module
+      - load_importer(func_name="import_announcements") -> returns module importers.import_announcements
+      - load_importer(Path.cwd()) (legacy) -> returns module importers.import_announcements
     """
-    root = Path(module_path).resolve()
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    import importlib
+    from pathlib import Path
 
-    name = func_name or "import_announcements"
-    return importlib.import_module(f"importers.{name}")
+    # Accept keyword aliases used in some tests
+    module_path = kwargs.get("module", module_path)
+    func_name = kwargs.get("func", kwargs.get("function", func_name))
+
+    # Legacy: tests pass just Path.cwd() and expect the announcements module
+    if isinstance(module_path, Path) or (module_path is None and not func_name and kwargs.get("project_root")):
+        return importlib.import_module("importers.import_announcements")
+
+    # If both provided, return the function
+    if module_path and func_name:
+        mod = importlib.import_module(module_path)
+        return getattr(mod, func_name)
+
+    # If only module provided, return the module
+    if module_path and not func_name:
+        return importlib.import_module(module_path)
+
+    # If only func provided, assume importers.<func> is a module and return it
+    if func_name and not module_path:
+        return importlib.import_module(f"importers.{func_name}")
+
+    raise TypeError("load_importer requires a module and/or function (see docstring for accepted forms).")
+
 
 
 # ---------- common fixtures ----------
