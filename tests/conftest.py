@@ -1,4 +1,6 @@
 # tests/conftest.py
+from __future__ import annotations
+
 import json
 import importlib
 import sys
@@ -144,9 +146,21 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def load_importer(module_path: str, func_name: str):
-    mod = importlib.import_module(module_path)
-    return getattr(mod, func_name)
+def load_importer(module_path: str, func_name: str | None = None):
+    """
+    Dynamic import helper used by tests.
+
+    Some tests call load_importer(Path.cwd()) and expect it to load the
+    announcements importer by default. If func_name is omitted, default to
+    'import_announcements'. Other tests can still pass func_name explicitly
+    (e.g., 'import_pages', 'import_modules', etc.).
+    """
+    root = Path(module_path).resolve()
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    name = func_name or "import_announcements"
+    return importlib.import_module(f"importers.{name}")
 
 
 # ---------- common fixtures ----------
