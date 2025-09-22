@@ -16,11 +16,33 @@ THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = THIS_FILE.parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+    
 
-# Load env files (repo defaults, then local overrides)
-from dotenv import load_dotenv
-load_dotenv(str(REPO_ROOT / ".env"))                 # optional, checked-in defaults
-load_dotenv(str(REPO_ROOT / ".env.local"), override=True)  # untracked secrets
+try:
+    from dotenv import load_dotenv as _load_dotenv
+except Exception:  # python-dotenv not installed in some test envs
+    _load_dotenv = None
+    
+def _load_env_if_opted_in() -> None:
+    """ 
+    only load .env files when explicitly opted in
+    - Set PYTHON_DOTENV_LOAD=1 to enable
+    - PYTHON_DOTENV_DISABLE=1 always disables
+    """
+    if os.getenv("PYTHON_DOTENV_DISABLE") == "1":
+        return
+    if os.getenv("PYTHON_DOTENV_LOAD") == "1":
+        return
+    if _load_dotenv is None:
+        return
+
+    # Load env files (repo defaults, then local overrides)
+    from dotenv import load_dotenv
+    _load_dotenv(str(REPO_ROOT / ".env"))                 # optional, checked-in defaults
+    _load_dotenv(str(REPO_ROOT / ".env.local"), override=True)  # untracked secrets
+
+# Do NOT load by default; tests control the environment.
+_load_env_if_opted_in()
 
 # --- Tunables ---------------------------------------------------------------
 DEFAULT_TIMEOUT = (5, 30)  # (connect, read) seconds
@@ -278,11 +300,6 @@ class CanvasAPI:
         return self._json_or_empty(r2)
     
     
-
-# Instantiate API clients (source/on-prem and target/cloud) only if fully configured
-# load_dotenv()  # read .env once
-if not os.getenv("PYTHON_DOTENV_DISABLE"):
-    load_dotenv()  # read .env once
 
 def _maybe_api(url_env: str, token_env: str) -> Optional["CanvasAPI"]:
     url = os.getenv(url_env)
