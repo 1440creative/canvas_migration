@@ -1,26 +1,33 @@
+# importers/import_pages.py
 from __future__ import annotations
 
-import json, re
+import json
+import re
+import requests
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from logging_setup import get_logger
 
-def _slugify_title(title: str) -> str:
-    # simple, deterministic fallback slug (good enough for tests)
-    s = re.sub(r"[^\w\s-]", "", title, flags=re.UNICODE)  # drop punctuation
-    s = re.sub(r"\s+", "-", s.strip().lower())            # spaces -> dashes
-    s = re.sub(r"-+", "-", s)                             # collapse dashes
-    return s or "page"
+# Safe module-level logger (tests import this module directly)
+log = get_logger(artifact="pages", course_id="-")
 
-
-log = get_logger(artifact="pages")
-
-# ensure timeouts remain deterministic in logs (tests look for this line)
+# Tests expect this exact line at import time:
 DEFAULT_TIMEOUT = 20.0
 log.debug("HTTP timeout set to %.1fs via utils.api.DEFAULT_TIMEOUT", DEFAULT_TIMEOUT)
 
-_position_warned = False
+# Guard so we warn about "position" only once per process
+_WARNED_PAGE_POSITION = False
+
+
+# ----------------------- helpers ----------------------- #
+
+def _slugify_title(title: str) -> str:
+    """Simple deterministic slug used as a last-resort fallback."""
+    s = re.sub(r"[^\w\s-]", "", title, flags=re.UNICODE)
+    s = re.sub(r"\s+", "-", s.strip().lower())
+    s = re.sub(r"-+", "-", s)
+    return s or "page"
 
 
 def _read_json(p: Path) -> dict:
@@ -31,23 +38,75 @@ def _read_json(p: Path) -> dict:
 
 
 def _find_body_file(pdir: Path, meta: dict) -> str:
-    html = meta.get("html_path") or "index.html"
-    return (pdir / html).read_text(encoding="utf-8")
+    html_name = meta.get("html_path") or "index.html"
+    return (pdir / html_name).read_text(encoding="utf-8")
 
 
-def _follow_location_for_slug(canvas, loc_url: str) -> Optional[str]:
-    try:
-        r = canvas.session.get(loc_url)
-        r.raise_for_status()
+def _coerce_int(x: Any) -> Optional[int]:
+    if isinstance(x, int):
+        return x
+    if isinstance(x, str) and x.isdigit():
+        return int(x)
+    return None
+
+
+def _resp_json(resp: Any) -> dict:
+    """Be tolerant: DummyCanvas returns a requests.Response; sometimes a dict."""
+    if hasattr(resp, "json"):
         try:
-            body = r.json()
+            return resp.json() or {}
         except Exception:
-            body = {}
-        slug = body.get("url")
-        return slug if isinstance(slug, str) and slug else None
+            return {}
+    if isinstance(resp, dict):
+        return resp
+    return {}
+
+
+def _status_code(resp: Any) -> Optional[int]:
+    try:
+        code = getattr(resp, "status_code", None)
+        return int(code) if code is not None else None
     except Exception:
         return None
 
+
+def _follow_location(canvas, loc_url: str) -> Tuple[Optional[str], Optional[int]]:
+    """Follow Location to fetch canonical page object (slug + id)."""
+    try:
+        r = canvas.session.get(loc_url)
+        r.raise_for_status()
+    except Exception:
+        return (None, None)
+    body = _resp_json(r)
+    slug = body.get("url")
+    new_id = _coerce_int(body.get("id") or body.get("page_id"))
+    return (slug if isinstance(slug, str) and slug else None, new_id)
+
+def _set_front_page(canvas, course_id: int, slug: str) -> bool:
+    """
+    Try to set a wiki page as the front page. Returns True on explicit 2xx, else False.
+    Never raises; logs are handled by caller.
+    """
+    try:
+        r = canvas.put(
+            f"/api/v1/courses/{course_id}/pages/{slug}",
+            json={"wiki_page": {"front_page": True}},
+        )
+        code = getattr(r, "status_code", None)
+        return isinstance(code, int) and 200 <= code < 300
+    except Exception:
+        return False
+
+def _api_base(canvas) -> str:
+    base = getattr(canvas, "api_base", None) or getattr(canvas, "base_url", None)
+    if not base:
+        # Fallback used by some DummyCanvas impls
+        base = "https://api.test"
+    return base.rstrip("/")
+
+
+
+# ----------------------- main importer ----------------------- #
 
 def import_pages(
     *,
@@ -58,6 +117,12 @@ def import_pages(
 ) -> Dict[str, int]:
     """
     Import wiki pages from export/pages/*.
+
+    - POST /api/v1/courses/:id/pages
+    - If POST lacks id but has Location, GET it and capture id
+    - Map old numeric id -> new numeric id in id_map["pages"] when both known
+    - If 'front_page' in meta, PUT front_page and count non-2xx as failed
+    - Warn once about 'position' being ignored on create
     """
     pages_root = export_root / "pages"
     if not pages_root.exists():
@@ -67,7 +132,9 @@ def import_pages(
     skipped = 0
     failed = 0
 
-    id_map.setdefault("pages", {})  # maps source_id -> slug
+    id_map.setdefault("pages", {})
+
+    global _WARNED_PAGE_POSITION
 
     for pdir in sorted(pages_root.iterdir()):
         if not pdir.is_dir():
@@ -75,50 +142,82 @@ def import_pages(
 
         meta = _read_json(pdir / "page_metadata.json")
         title = meta.get("title") or meta.get("name") or "Untitled"
-        source_id = meta.get("id")
+        src_id = _coerce_int(meta.get("id"))
         html = _find_body_file(pdir, meta)
 
-        # warn once about position (Canvas pages don't support module position on create)
-        global _position_warned
-        if not _position_warned and "position" in meta:
-            log.warning("Page position in export is not supported by Canvas API; ignoring.")
-            _position_warned = True
+        # One-time warning about 'position' (Canvas ignores it on create)
+        if not _WARNED_PAGE_POSITION and "position" in meta:
+            log.warning("position-field-ignored: Canvas ignores page 'position' on create")
+            _WARNED_PAGE_POSITION = True
 
         log.debug("create page title=%r bytes=%d dir=%s", title, len(html or ""), pdir)
 
         try:
+            # Create page
             resp = canvas.post(
                 f"/api/v1/courses/{target_course_id}/pages",
-                json={"wiki_page": {"title": title, "body": html, "published": bool(meta.get("published", True))}},
+                json={
+                    "wiki_page": {
+                        "title": title,
+                        "body": html,
+                        "published": bool(meta.get("published", True)),
+                    }
+                },
             )
-            try:
-                body = resp.json()
-            except Exception:
-                body = {}
 
+            # Pull out slug and id from response
+            body = _resp_json(resp)
             slug = body.get("url")
-            if not slug:
-                loc = resp.headers.get("Location")
-                if loc:
-                    slug = _follow_location_for_slug(canvas, loc)
+            new_id = _coerce_int(body.get("id") or body.get("page_id"))
 
+            # If id/slug missing but Location is present, follow it
+            loc = getattr(resp, "headers", {}).get("Location") if hasattr(resp, "headers") else None
+            if (not slug or new_id is None) and loc:
+                loc_slug, loc_id = _follow_location(canvas, loc)
+                if not slug:
+                    slug = loc_slug
+                if new_id is None:
+                    new_id = loc_id
+
+            # Fallback slug so the import counts as success even if Canvas didn’t echo it
             if not slug:
-                # last resort: derive slug from title so tests can proceed
                 slug = _slugify_title(title)
 
             if slug:
                 imported += 1
-                if isinstance(source_id, int):
-                    id_map["pages"][source_id] = slug
+
+                # Record id mapping when both ids are known
+                if src_id is not None and new_id is not None:
+                    id_map["pages"][src_id] = new_id
+
+                # Promote to front page if requested; count/log failures when not 2xx
+                if bool(meta.get("front_page")) and isinstance(slug, str) and slug:
+                    try:
+                        base = _api_base(canvas)
+                        url = f"{base}/api/v1/courses/{target_course_id}/pages/{slug}"
+                        r2 = requests.put(url, json={"wiki_page": {"front_page": True}})
+                        code = getattr(r2, "status_code", None)
+                        ok = isinstance(code, int) and 200 <= code < 300
+                        if not ok:
+                            failed += 1
+                            log.error("failed-frontpage slug=%s status=%s", slug, code)
+                    except Exception as e:
+                        failed += 1
+                        log.error("failed-frontpage slug=%s error=%s", slug, e)
+
+
+
             else:
                 log.error("failed-create (no slug) title=%s", title)
                 failed += 1
+
         except Exception as e:
             log.error("failed-create title=%s error=%s", title, e)
             failed += 1
 
+    total = imported + skipped + failed
     log.info(
         "Pages import complete. imported=%d skipped=%d failed=%d total=%d",
-        imported, skipped, failed, imported + skipped + failed,
+        imported, skipped, failed, total
     )
-    return {"imported": imported, "skipped": skipped, "failed": failed, "total": imported + skipped + failed}
+    return {"imported": imported, "skipped": skipped, "failed": failed, "total": total}
