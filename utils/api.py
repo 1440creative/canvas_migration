@@ -16,15 +16,14 @@ THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = THIS_FILE.parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-    
 
 try:
     from dotenv import load_dotenv as _load_dotenv
 except Exception:  # python-dotenv not installed in some test envs
     _load_dotenv = None
-    
+
 def _load_env_if_opted_in() -> None:
-    """ 
+    """
     only load .env files when explicitly opted in
     - Set PYTHON_DOTENV_LOAD=1 to enable
     - PYTHON_DOTENV_DISABLE=1 always disables
@@ -37,15 +36,15 @@ def _load_env_if_opted_in() -> None:
         return
 
     # Load env files (repo defaults, then local overrides)
-    from dotenv import load_dotenv
-    _load_dotenv(str(REPO_ROOT / ".env"))                 # optional, checked-in defaults
-    _load_dotenv(str(REPO_ROOT / ".env.local"), override=True)  # untracked secrets
+    from dotenv import load_dotenv  # type: ignore
+    _load_dotenv(str(REPO_ROOT / ".env"))
+    _load_dotenv(str(REPO_ROOT / ".env.local"), override=True)
 
 # Do NOT load by default; tests control the environment.
 _load_env_if_opted_in()
 
 # --- Tunables ---------------------------------------------------------------
-DEFAULT_TIMEOUT = (5, 30)  # (connect, read) seconds
+DEFAULT_TIMEOUT: tuple[float, float] = (5, 30)  # (connect, read) seconds
 DEFAULT_PER_PAGE = 100
 USER_AGENT = "CanvasMigrations/1.0 (+https://example.org)"  # customize
 API_PREFIX = "/api/v1"
@@ -83,7 +82,6 @@ class CanvasAPI:
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {token}",
-            # "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         })
 
@@ -160,7 +158,6 @@ class CanvasAPI:
         params.setdefault("per_page", DEFAULT_PER_PAGE)
 
         results: List[Dict[str, Any]] = []
-        ###
         while url:
             # Only send params on the first request; follow-ups use absolute next URLs.
             r = self._request("GET", url, params=params if not results else None)
@@ -173,9 +170,9 @@ class CanvasAPI:
 
             # RFC5988 Link header parsing (rel=next or rel="next")
             url = self._next_link(r.headers)
- 
+
         return results
-    
+
     def post(self, endpoint: str, *, json: Optional[Dict[str, Any]] = None,
              data: Optional[Dict[str, Any]] = None, files=None, params=None) -> requests.Response:
         """
@@ -222,9 +219,7 @@ class CanvasAPI:
             "parent_folder_path": parent_folder_path,
             "on_duplicate": on_duplicate,
         }
-        # Use JSON body to match session default header
         return self.post_json(f"/api/v1/courses/{course_id}/files", payload=payload)
- 
 
     def _next_link(self, headers: Dict[str, Any]) -> Optional[str]:
         """
@@ -243,7 +238,7 @@ class CanvasAPI:
             if any(r == "rel=next" or r == 'rel="next"' for r in rel_parts):
                 return url_part[url_part.find("<") + 1 : url_part.find(">")]
         return None
-    
+
     def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
         """
         Perform a multipart/form-data POST (used for Canvas file uploads).
@@ -254,7 +249,7 @@ class CanvasAPI:
 
         max_attempts = 4
         delay = 1.0
-        last_err = None
+        last_err: Exception | None = None
         for attempt in range(1, max_attempts + 1):
             try:
                 resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
@@ -291,15 +286,6 @@ class CanvasAPI:
             except ValueError:
                 return {}
         return {}
-    
-    def _json_from_location(self, resp: requests.Response) -> dict:
-        loc = resp.headers.get("Location")
-        if not loc:
-            return {}
-        r2 = self._request("GET", loc)
-        return self._json_or_empty(r2)
-    
-    
 
 def _maybe_api(url_env: str, token_env: str) -> Optional["CanvasAPI"]:
     url = os.getenv(url_env)

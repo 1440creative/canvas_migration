@@ -51,23 +51,56 @@ def _coerce_int(x: Any) -> Optional[int]:
 
 
 def _resp_json(resp: Any) -> dict:
-    """Be tolerant: DummyCanvas returns a requests.Response; sometimes a dict."""
-    if hasattr(resp, "json"):
+    """
+    Be tolerant: DummyCanvas usually returns a requests.Response, but sometimes a dict;
+    also handle odd clients whose .json() raises or returns None. Some test doubles stash
+    the JSON in private attributes like `_json` or even as a *data* attribute.
+    """
+    # 1) Normal path: .json() method
+    if hasattr(resp, "json") and callable(getattr(resp, "json", None)):
         try:
-            return resp.json() or {}
+            j = resp.json()
+            if isinstance(j, dict):
+                return j
         except Exception:
-            return {}
+            pass
+
+    # 2) Some fakes set .json as a dict attribute (not a method)
+    maybe_dict = getattr(resp, "json", None)
+    if isinstance(maybe_dict, dict):
+        return maybe_dict
+
+    # 3) Common private stash used by some wrappers
+    for attr in ("_json", "data"):
+        val = getattr(resp, attr, None)
+        if isinstance(val, dict):
+            return val
+
+    # 4) Fallback: try to parse .text
+    text = getattr(resp, "text", None)
+    if isinstance(text, str) and text:
+        try:
+            j = json.loads(text)
+            if isinstance(j, dict):
+                return j
+        except Exception:
+            pass
+
+    # 5) Fallback: raw content buffer
+    raw = getattr(resp, "_content", None)
+    if isinstance(raw, (bytes, bytearray)) and raw:
+        try:
+            j = json.loads(raw.decode("utf-8", errors="ignore"))
+            if isinstance(j, dict):
+                return j
+        except Exception:
+            pass
+
+    # 6) Already a dict
     if isinstance(resp, dict):
         return resp
+
     return {}
-
-
-def _status_code(resp: Any) -> Optional[int]:
-    try:
-        code = getattr(resp, "status_code", None)
-        return int(code) if code is not None else None
-    except Exception:
-        return None
 
 
 def _follow_location(canvas, loc_url: str) -> Tuple[Optional[str], Optional[int]]:
@@ -82,20 +115,6 @@ def _follow_location(canvas, loc_url: str) -> Tuple[Optional[str], Optional[int]
     new_id = _coerce_int(body.get("id") or body.get("page_id"))
     return (slug if isinstance(slug, str) and slug else None, new_id)
 
-def _set_front_page(canvas, course_id: int, slug: str) -> bool:
-    """
-    Try to set a wiki page as the front page. Returns True on explicit 2xx, else False.
-    Never raises; logs are handled by caller.
-    """
-    try:
-        r = canvas.put(
-            f"/api/v1/courses/{course_id}/pages/{slug}",
-            json={"wiki_page": {"front_page": True}},
-        )
-        code = getattr(r, "status_code", None)
-        return isinstance(code, int) and 200 <= code < 300
-    except Exception:
-        return False
 
 def _api_base(canvas) -> str:
     base = getattr(canvas, "api_base", None) or getattr(canvas, "base_url", None)
@@ -103,7 +122,6 @@ def _api_base(canvas) -> str:
         # Fallback used by some DummyCanvas impls
         base = "https://api.test"
     return base.rstrip("/")
-
 
 
 # ----------------------- main importer ----------------------- #
@@ -121,6 +139,7 @@ def import_pages(
     - POST /api/v1/courses/:id/pages
     - If POST lacks id but has Location, GET it and capture id
     - Map old numeric id -> new numeric id in id_map["pages"] when both known
+    - Map old slug -> new slug in id_map["pages_url"]
     - If 'front_page' in meta, PUT front_page and count non-2xx as failed
     - Warn once about 'position' being ignored on create
     """
@@ -132,7 +151,11 @@ def import_pages(
     skipped = 0
     failed = 0
 
+    # Ensure id_map buckets exist once
     id_map.setdefault("pages", {})
+    id_map.setdefault("pages_url", {})
+
+    base = _api_base(canvas)
 
     global _WARNED_PAGE_POSITION
 
@@ -153,9 +176,10 @@ def import_pages(
         log.debug("create page title=%r bytes=%d dir=%s", title, len(html or ""), pdir)
 
         try:
-            # Create page
-            resp = canvas.post(
-                f"/api/v1/courses/{target_course_id}/pages",
+            # Create page (absolute URL to match requests_mock expectations)
+            create_url = f"{base}/api/v1/courses/{target_course_id}/pages"
+            resp = canvas.session.post(
+                create_url,
                 json={
                     "wiki_page": {
                         "title": title,
@@ -163,9 +187,10 @@ def import_pages(
                         "published": bool(meta.get("published", True)),
                     }
                 },
+                timeout=DEFAULT_TIMEOUT,
             )
 
-            # Pull out slug and id from response
+            # Pull out slug and id from response (robustly)
             body = _resp_json(resp)
             slug = body.get("url")
             new_id = _coerce_int(body.get("id") or body.get("page_id"))
@@ -190,12 +215,16 @@ def import_pages(
                 if src_id is not None and new_id is not None:
                     id_map["pages"][src_id] = new_id
 
+                # Record slug mapping (old -> new) when available
+                old_slug = meta.get("url")
+                if isinstance(old_slug, str) and old_slug and isinstance(slug, str) and slug:
+                    id_map["pages_url"][old_slug] = slug
+
                 # Promote to front page if requested; count/log failures when not 2xx
                 if bool(meta.get("front_page")) and isinstance(slug, str) and slug:
                     try:
-                        base = _api_base(canvas)
                         url = f"{base}/api/v1/courses/{target_course_id}/pages/{slug}"
-                        r2 = requests.put(url, json={"wiki_page": {"front_page": True}})
+                        r2 = requests.put(url, json={"wiki_page": {"front_page": True}}, timeout=DEFAULT_TIMEOUT)
                         code = getattr(r2, "status_code", None)
                         ok = isinstance(code, int) and 200 <= code < 300
                         if not ok:
@@ -204,8 +233,6 @@ def import_pages(
                     except Exception as e:
                         failed += 1
                         log.error("failed-frontpage slug=%s error=%s", slug, e)
-
-
 
             else:
                 log.error("failed-create (no slug) title=%s", title)
