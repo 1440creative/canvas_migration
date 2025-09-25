@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol, Tuple
 
 import requests
 from logging_setup import get_logger
@@ -19,6 +19,8 @@ class CanvasLike(Protocol):
     def get(self, endpoint: str, **kwargs) -> Any: ...
 
 
+# ----------------------- small helpers ----------------------- #
+
 def _read_json(path: Path) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -32,6 +34,68 @@ def _coerce_int(val: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
 
+def _resp_json(resp: Any) -> dict:
+    """
+    Be tolerant of various test doubles:
+    - requests.Response with .json() / .text / _content
+    - dict-like objects
+    """
+    # Normal path
+    if hasattr(resp, "json") and callable(getattr(resp, "json", None)):
+        try:
+            j = resp.json()
+            if isinstance(j, dict):
+                return j
+        except Exception:
+            pass
+
+    # Sometimes a dict is stashed directly
+    maybe_dict = getattr(resp, "json", None)
+    if isinstance(maybe_dict, dict):
+        return maybe_dict
+
+    # Try .text
+    text = getattr(resp, "text", None)
+    if isinstance(text, str) and text:
+        try:
+            j = json.loads(text)
+            if isinstance(j, dict):
+                return j
+        except Exception:
+            pass
+
+    # Raw bytes
+    raw = getattr(resp, "_content", None)
+    if isinstance(raw, (bytes, bytearray)) and raw:
+        try:
+            j = json.loads(raw.decode("utf-8", errors="ignore"))
+            if isinstance(j, dict):
+                return j
+        except Exception:
+            pass
+
+    # Already a dict?
+    if isinstance(resp, dict):
+        return resp
+
+    return {}
+
+def _abs_endpoint(api_root: str, endpoint_path: str) -> str:
+    root = api_root.rstrip("/")
+    ep = endpoint_path if endpoint_path.startswith("/") else ("/" + endpoint_path)
+    return f"{root}{ep}"
+
+def _follow_location_for_id(canvas: CanvasLike, loc_url: str) -> Tuple[Optional[int], dict]:
+    """
+    Follow a Location header to get the canonical object; return (id, body).
+    """
+    try:
+        r = canvas.session.get(loc_url)
+        r.raise_for_status()
+        body = _resp_json(r)
+        return (_coerce_int(body.get("id")), body)
+    except Exception:
+        return (None, {})
 
 def _pick_desc_html(dir_: Path, meta: Dict[str, Any]) -> str:
     rel = meta.get("html_path")
@@ -42,9 +106,12 @@ def _pick_desc_html(dir_: Path, meta: Dict[str, Any]) -> str:
             continue
         p = dir_ / name
         if p.exists():
-            return _read_text_if_exists(p) or ""
+            txt = _read_text_if_exists(p)
+            return txt or ""
     return ""
 
+
+# ----------------------- main importer ----------------------- #
 
 def import_quizzes(
     *,
@@ -58,6 +125,7 @@ def import_quizzes(
     Import classic quizzes:
 
       • POST /courses/:id/quizzes with {"quiz": {...}}
+      • If body lacks id but Location header present, follow it to fetch id
       • Optionally POST questions from questions.json:
           POST /courses/:id/quizzes/:quiz_id/questions with {"question": {...}}
       • Record id_map['quizzes'][old_id] = new_id
@@ -74,6 +142,10 @@ def import_quizzes(
 
     limit_env = os.getenv("IMPORT_QUIZZES_LIMIT")
     limit: Optional[int] = int(limit_env) if (limit_env and limit_env.isdigit()) else None
+
+    # Absolute endpoint base (so requests_mock matches exactly)
+    api_root = (getattr(canvas, "api_root", "") or "").rstrip("/")
+    abs_create_base = f"{api_root}/api/v1/courses/{target_course_id}/quizzes"
 
     for item in sorted(q_dir.iterdir()):
         if not item.is_dir():
@@ -107,7 +179,7 @@ def import_quizzes(
             "description": description_html,
             "published": bool(meta.get("published", False)),
         }
-        # Common optional fields
+        # Pass-through optional fields commonly present in exports
         for k in [
             "quiz_type", "time_limit", "shuffle_answers", "hide_results",
             "one_question_at_a_time", "cant_go_back", "allowed_attempts",
@@ -119,43 +191,35 @@ def import_quizzes(
 
         old_id = _coerce_int(meta.get("id"))
 
-        endpoint = f"/api/v1/courses/{target_course_id}/quizzes"
-        log.debug("create quiz title=%r dir=%s", title, item)
         try:
-            resp = canvas.post(endpoint, json={"quiz": quiz})
-            try:
-                data = resp.json()
-            except ValueError:
-                data = {}
+            # Use absolute URL to satisfy requests_mock expectations
+            resp = canvas.session.post(abs_create_base, json={"quiz": quiz})
         except Exception as e:
             counters["failed"] += 1
             log.exception("failed-create title=%s: %s", title, e)
             continue
 
-        new_id = _coerce_int(data.get("id"))
+        body = _resp_json(resp)
+        new_id = _coerce_int(body.get("id"))
 
-        if new_id is None and "Location" in resp.headers:
-            try:
-                follow = canvas.session.get(resp.headers["Location"])
-                follow.raise_for_status()
-                try:
-                    j2 = follow.json()
-                except ValueError:
-                    j2 = {}
-                new_id = _coerce_int(j2.get("id"))
-                data = j2 or data
-            except Exception as e:
-                log.debug("follow-location failed for quiz=%s: %s", title, e)
+        if new_id is None:
+            loc = getattr(resp, "headers", {}).get("Location")
+            if loc:
+                new_id, body2 = _follow_location_for_id(canvas, loc)
+                if new_id is None:
+                    body = body2 or body  # keep whatever we got
+            # else: stay None
 
         if new_id is None:
             counters["failed"] += 1
             log.error("failed-create (no id) title=%s", title)
             continue
 
+        # Map old->new when possible
         if old_id is not None:
             id_map["quizzes"][old_id] = new_id
 
-        # Questions (optional)
+        # Optional: create questions
         if include_questions:
             q_json = item / "questions.json"
             if q_json.exists():
@@ -166,12 +230,10 @@ def import_quizzes(
                     log.warning("failed to read questions.json for %s: %s", title, e)
                     questions = []
 
+                questions_url = f"{abs_create_base}/{new_id}/questions"
                 for q in questions:
                     try:
-                        canvas.post(
-                            f"/api/v1/courses/{target_course_id}/quizzes/{new_id}/questions",
-                            json={"question": q},
-                        )
+                        canvas.session.post(questions_url, json={"question": q})
                         counters["questions"] += 1
                     except Exception as e:
                         log.warning("failed to create question for quiz=%s: %s", title, e)
