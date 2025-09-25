@@ -1,172 +1,123 @@
 # importers/import_rubrics.py
-"""
-Import course-level rubrics exported to:
-    <export_root>/<course_id>/course/rubrics/rubric_*.json
-
-Behavior:
-- Idempotent: if a rubric with the same title already exists in the target
-  course, do not recreate it — reuse the existing rubric id.
-- Builds/updates id_map["rubrics"] with {old_id -> new_id} whenever possible.
-- Uses Canvas JSON creation endpoint:
-    POST /api/v1/courses/:course_id/rubrics
-  with payload:
-    {
-      "rubric": [ ...criteria... ],
-      "title": "...",
-      "free_form_criterion_comments": false
-    }
-
-Returns a summary dict: {"created": N, "failed": M, "total": T}
-"""
-
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, Optional
-
 import json
-import requests
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from logging_setup import get_logger
 
-__all__ = ["import_rubrics"]
-
-
-def _read_json(p: Path) -> dict:
+def _read_json(path: Path) -> Any:
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
-        return {}
-
-
-def _coerce_int(x: Any) -> Optional[int]:
-    try:
-        return int(x) if x is not None else None
-    except (TypeError, ValueError):
         return None
 
-
-def _old_id_from_filename(p: Path) -> Optional[int]:
+def _find_rubrics_json(export_root: Path) -> Optional[Path]:
     """
-    Expect filenames like rubric_65123.json; return 65123 when present.
+    Prefer top-level rubrics/rubrics.json (new),
+    fallback to legacy course/rubrics/rubrics.json.
     """
-    stem = p.stem  # e.g., "rubric_65123"
-    if "_" in stem:
-        suffix = stem.split("_", 1)[1]
-        return _coerce_int(suffix)
+    p1 = Path(export_root) / "rubrics" / "rubrics.json"
+    if p1.exists():
+        return p1
+    p2 = Path(export_root) / "course" / "rubrics" / "rubrics.json"
+    if p2.exists():
+        return p2
     return None
-
-
-def _existing_rubrics_by_title(canvas, course_id: int) -> Dict[str, Dict[str, Any]]:
-    """
-    Return a map: lowercased title -> rubric object (must include 'id').
-    """
-    try:
-        items = canvas.get(f"/api/v1/courses/{course_id}/rubrics")
-    except Exception:
-        items = []
-    out: Dict[str, Dict[str, Any]] = {}
-    for r in (items or []):
-        title = (r.get("title") or "").strip()
-        if title and isinstance(r.get("id"), int):
-            out[title.lower()] = r
-    return out
-
 
 def import_rubrics(
     *,
     target_course_id: int,
     export_root: Path,
     canvas,
-    id_map: Optional[Dict[str, Dict[Any, Any]]] = None,
+    id_map: Dict[str, Dict[Any, Any]] | None = None,
 ) -> Dict[str, int]:
     """
-    Create (or reuse) rubrics in the target course from exported JSON files.
-
-    Args:
-        target_course_id: numeric Canvas course id on the TARGET instance
-        export_root: path like ".../<source_course_id>"
-        canvas: your CanvasAPI-like client
-        id_map: optional shared id_map dict to be updated (adds "rubrics" bucket)
-
-    Returns:
-        {"created": int, "failed": int, "total": int}
+    Import rubrics and create rubric associations to mapped objects (assignments).
+    Returns counters: {"imported","skipped","failed","total"}.
     """
     log = get_logger(artifact="rubrics_import", course_id=target_course_id)
-    out = {"created": 0, "failed": 0, "total": 0}
+    id_map = id_map or {}
+    id_map.setdefault("rubrics", {})
+    id_map.setdefault("assignments", {})
 
-    rubrics_dir = export_root / "course" / "rubrics"
-    if not rubrics_dir.exists():
-        log.info("No rubrics to import (missing %s)", rubrics_dir)
-        return out
+    src_path = _find_rubrics_json(export_root)
+    if not src_path:
+        log.info("No rubrics to import (missing %s)", (Path(export_root) / "rubrics" / "rubrics.json"))
+        return {"imported": 0, "skipped": 0, "failed": 0, "total": 0}
 
-    # Ensure id_map bucket exists
-    if id_map is not None:
-        id_map.setdefault("rubrics", {})
+    data = _read_json(src_path) or []
+    if not isinstance(data, list):
+        data = []
 
-    # Cache of existing rubrics (for idempotency)
-    by_title = _existing_rubrics_by_title(canvas, target_course_id)
+    imported = 0
+    failed = 0
+    skipped = 0
 
-    # Iterate all rubric files
-    files = sorted(rubrics_dir.glob("rubric_*.json"))
-    for jf in files:
-        out["total"] += 1
+    for r in data:
+        title = r.get("title") or "Untitled Rubric"
+        criteria = r.get("criteria") or []
+        # Build Canvas payload
+        payload = {
+            "rubric": {
+                "title": title,
+                "criteria": criteria,
+            }
+        }
+
         try:
-            data = _read_json(jf)
-            title = (data.get("title") or "").strip()
-            if not title:
-                raise ValueError(f"{jf.name} has no 'title'")
+            resp = canvas.post(f"/api/v1/courses/{target_course_id}/rubrics", json=payload)
+            new = resp.json() if hasattr(resp, "json") else {}
+            new_id = new.get("id")
+            if not new_id:
+                # Try alternate shapes defensively
+                if isinstance(new, dict):
+                    new_id = new.get("rubric_id") or new.get("data", {}).get("id")
 
-            old_id = _old_id_from_filename(jf)
-            if old_id is None:
-                old_id = _coerce_int(data.get("id"))
-
-            # Idempotency: if a rubric with the same title already exists, reuse it
-            existing = by_title.get(title.lower())
-            if existing and isinstance(existing.get("id"), int):
-                new_id = int(existing["id"])
-                if id_map is not None and old_id is not None:
-                    id_map["rubrics"][old_id] = new_id
-                log.info("Rubric already exists: %s (id=%s) — skipping create", title, new_id)
+            if not new_id:
+                failed += 1
+                log.error("failed to create rubric (no id) title=%r", title)
                 continue
 
-            # Prepare payload (Canvas accepts a simplified JSON structure)
-            criteria = data.get("rubric") or data.get("criteria") or []
-            payload = {
-                "rubric": criteria,
-                "title": title,
-                "free_form_criterion_comments": bool(data.get("free_form_criterion_comments", False)),
-            }
+            # map old rubric id if present
+            old_id = r.get("id")
+            if isinstance(old_id, int):
+                id_map["rubrics"][old_id] = new_id
 
-            # Create rubric
-            res = canvas.post_json(f"/api/v1/courses/{target_course_id}/rubrics", payload=payload)
+            imported += 1
 
-            # Canvas typically returns a rubric object with "id" (or nested)
-            new_id = res.get("id") or (res.get("rubric") or {}).get("id")
-            if not isinstance(new_id, int):
-                raise RuntimeError("Create rubric did not return an id")
+            # Create associations (e.g., to assignments) with mapped IDs
+            for a in (r.get("associations") or []):
+                if a.get("association_type") != "Assignment":
+                    continue
+                old_assignment_id = a.get("association_id")
+                new_assignment_id = id_map.get("assignments", {}).get(old_assignment_id)
+                if not new_assignment_id:
+                    # cannot associate; skip silently
+                    continue
 
-            # Record mapping and update cache
-            if id_map is not None and old_id is not None:
-                id_map["rubrics"][old_id] = int(new_id)
-            by_title[title.lower()] = {"id": int(new_id), "title": title}
+                assoc_payload = {
+                    "rubric_association": {
+                        "rubric_id": new_id,
+                        "association_type": "Assignment",
+                        "association_id": new_assignment_id,
+                        "use_for_grading": bool(a.get("use_for_grading", True)),
+                        "hide_score_total": bool(a.get("hide_score_total", False)),
+                        "purpose": a.get("purpose") or "grading",
+                    }
+                }
+                try:
+                    canvas.post(f"/api/v1/courses/{target_course_id}/rubric_associations", json=assoc_payload)
+                except Exception as e:
+                    # association failures shouldn't fail rubric creation
+                    log.warning("rubric association failed title=%r error=%s", title, e)
 
-            log.info("Created rubric (form): %s", title)
-            out["created"] += 1
-
-        except requests.HTTPError as e:
-            status = getattr(e.response, "status_code", None)
-            body = e.response.text[:600] if getattr(e, "response", None) is not None else ""
-            log.exception("Failed to create rubric from %s: %s %s", jf.name, status, body)
-            out["failed"] += 1
         except Exception as e:
-            log.exception("Failed to create rubric from %s: %s", jf.name, e)
-            out["failed"] += 1
+            failed += 1
+            log.error("failed to create rubric title=%r error=%s", title, e)
 
-    log.info(
-        "Rubrics import complete. created=%d failed=%d total=%d",
-        out["created"],
-        out["failed"],
-        out["total"],
-    )
-    return out
+    counters = {"imported": imported, "skipped": skipped, "failed": failed, "total": len(data)}
+    log.info("Rubrics import complete. imported=%d skipped=%d failed=%d total=%d",
+             counters["imported"], counters["skipped"], counters["failed"], counters["total"])
+    return counters
