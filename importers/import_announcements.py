@@ -89,19 +89,20 @@ def import_announcements(
       - body.html
       - message.html
 
-    Returns: {"imported": n, "skipped": n, "failed": n}
+    Returns: {"imported": n, "skipped": n, "failed": n, "total": t}
     """
     log = get_logger(course_id=target_course_id, artifact="announcements")
     a_root = export_root / "announcements"
 
     if not a_root.exists():
         log.info("No announcements directory found at %s", a_root)
-        return {"imported": 0, "skipped": 0, "failed": 0}
+        return {"imported": 0, "skipped": 0, "failed": 0, "total": 0}
 
-    counters = {"imported": 0, "skipped": 0, "failed": 0}
+    counters = {"imported": 0, "skipped": 0, "failed": 0, "total": 0}
     a_map: Dict[Any, Any] = (id_map.setdefault("announcements", {}) if isinstance(id_map, dict) else {})
 
     for meta_file in a_root.rglob("announcement_metadata.json"):
+        counters["total"] += 1
         try:
             meta = _read_json(meta_file)
             title = meta.get("title") or meta.get("subject") or "Announcement"
@@ -174,7 +175,7 @@ def import_announcements(
             log.exception("Failed to import announcement from %s: %s", meta_file.parent, e)
 
     log.info(
-        "Announcements import complete. imported=%d skipped=%d failed=%d",
-        counters["imported"], counters["skipped"], counters["failed"],
+        "Announcements import complete. imported=%d skipped=%d failed=%d total=%d",
+        counters["imported"], counters["skipped"], counters["failed"], counters["total"],
     )
     return counters
