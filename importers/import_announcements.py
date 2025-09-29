@@ -110,11 +110,20 @@ def import_announcements(
 
             # Choose HTML source: metadata.html_path > body.html > message.html
             html_name = meta.get("html_path")
-            html_path = _first_existing(
-                meta_file.parent / html_name if html_name else None,
-                meta_file.parent / "body.html",
-                meta_file.parent / "message.html",
+            html_candidates = []
+            if isinstance(html_name, str) and html_name:
+                if "/" in html_name:
+                    html_candidates.append(export_root / html_name)
+                html_candidates.append(meta_file.parent / html_name)
+
+            html_candidates.extend(
+                [
+                    meta_file.parent / "body.html",
+                    meta_file.parent / "message.html",
+                ]
             )
+
+            html_path = _first_existing(*html_candidates)
             if not html_path:
                 counters["skipped"] += 1
                 log.warning("Skipping %s (no HTML body found)", meta_file.parent)

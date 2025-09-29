@@ -15,17 +15,28 @@ def _read_json(p: Path) -> Dict[str, Any]:
         return {}
 
 
-def _read_html(d: Path, meta: Dict[str, Any]) -> str:
-    # prefer meta-provided html path, else index.html, else body.html
-    html_name = meta.get("html_path") or "index.html"
-    p = d / html_name
-    if not p.exists():
-        alt = d / "body.html"
-        p = alt if alt.exists() else p
-    try:
-        return p.read_text(encoding="utf-8")
-    except Exception:
-        return ""
+def _read_html(d: Path, meta: Dict[str, Any], *, course_root: Path | None = None) -> str:
+    """Load discussion HTML, tolerating html_path relative to course root."""
+    html_name = meta.get("html_path")
+
+    candidates = []
+    if isinstance(html_name, str) and html_name:
+        if course_root is not None and "/" in html_name:
+            candidates.append(course_root / html_name)
+        candidates.append(d / html_name)
+
+    candidates.append(d / "index.html")
+    candidates.append(d / "body.html")
+
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            return candidate.read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+    return ""
 
 
 def import_discussions(
@@ -78,7 +89,7 @@ def import_discussions(
             continue
 
         title = meta.get("title") or "Discussion"
-        message_html = _read_html(d, meta)
+        message_html = _read_html(d, meta, course_root=export_root)
         published = bool(meta.get("published"))
         delayed_post_at = meta.get("delayed_post_at")
 

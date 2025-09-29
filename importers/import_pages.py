@@ -37,10 +37,26 @@ def _read_json(p: Path) -> dict:
         return {}
 
 
-def _find_body_file(pdir: Path, meta: dict) -> str:
-    # prefer explicit html_path else index.html
+def _find_body_file(pdir: Path, meta: dict, *, course_root: Path | None = None) -> str:
+    """Return HTML body, supporting html_path relative to course root."""
     html_name = meta.get("html_path") or "index.html"
-    return (pdir / html_name).read_text(encoding="utf-8")
+
+    candidates = []
+    if isinstance(html_name, str) and html_name:
+        if course_root is not None and "/" in html_name:
+            candidates.append(course_root / html_name)
+        candidates.append(pdir / html_name)
+
+    candidates.append(pdir / "index.html")
+    candidates.append(pdir / "body.html")
+
+    for candidate in candidates:
+        try:
+            return candidate.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+
+    raise FileNotFoundError(f"Missing HTML body for page export: {pdir}")
 
 
 def _coerce_int(x: Any) -> Optional[int]:
@@ -173,7 +189,7 @@ def import_pages(
             _WARNED_PAGE_POSITION = True
 
         # Read HTML body (raises if file missing; tests always provide it)
-        html = _find_body_file(pdir, meta)
+        html = _find_body_file(pdir, meta, course_root=export_root)
 
         log.debug("create page title=%r bytes=%d dir=%s", title, len(html or ""), pdir)
 
