@@ -25,11 +25,14 @@ def export_home(course_id: int, export_root: Path, api) -> Dict[str, Any]:
         try:
             # The front page (wiki page) has page_id/url/title
             front = api.get(f"/api/v1/courses/{course_id}/front_page")
+            front_url = front.get("url")
             out["front_page"] = {
                 "page_id": front.get("page_id"),
-                "url": front.get("url"),
+                "url": front_url,
                 "title": front.get("title"),
             }
+            if front_url:
+                out["front_page_url"] = front_url
         except Exception as e:
             log.warning("Could not fetch front_page: %s", e)
 
