@@ -67,20 +67,48 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
         # 3) Convert to metadata + collect backrefs
         item_metas: List[Dict[str, Any]] = []
         for it in items_sorted:
+            item_type = (it.get("type") or "").strip()
             item_meta: Dict[str, Any] = {
                 "id": it.get("id"),
                 "position": it.get("position"),
-                "type": it.get("type"),                # "Page", "Assignment", "File", "Quiz", "Discussion"
-                "content_id": it.get("content_id"),    # None for Page (Canvas uses page_url)
+                "type": item_type,                # "Page", "Assignment", "File", "Quiz", "Discussion"
                 "title": it.get("title"),
-                "url": it.get("page_url") or it.get("html_url") or None,
             }
+
+            if it.get("published") is not None:
+                item_meta["published"] = bool(it.get("published"))
+
+            content_id = it.get("content_id")
+            if content_id is not None:
+                item_meta["content_id"] = content_id
+
+            html_url = it.get("html_url") or it.get("url")
+            if html_url:
+                item_meta["url"] = html_url
+
+            if item_type == "Page":
+                page_url = (it.get("page_url") or "").strip()
+                if page_url:
+                    item_meta["page_url"] = page_url
+
+            elif item_type == "ExternalUrl":
+                ext_url = it.get("external_url") or it.get("url")
+                if ext_url:
+                    item_meta["external_url"] = ext_url
+
+            elif item_type == "ExternalTool":
+                ext_tool_url = it.get("external_url") or it.get("html_url")
+                if ext_tool_url:
+                    item_meta["external_url"] = ext_tool_url
+                if it.get("new_tab") is not None:
+                    item_meta["new_tab"] = bool(it.get("new_tab"))
+                if it.get("asset_string"):
+                    item_meta["asset_string"] = it.get("asset_string")
+
             item_metas.append(item_meta)
 
             # Collect backrefs by type
-            item_type = it.get("type")
             item_id = it.get("id")
-            content_id = it.get("content_id")
 
             if item_type == "Page" and it.get("page_url") and item_id:
                 page_backrefs[str(it["page_url"]).strip()].append(int(item_id))
