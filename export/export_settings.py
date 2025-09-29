@@ -66,13 +66,13 @@ def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) ->
         "is_blueprint": bool(course.get("blueprint") or course.get("is_blueprint")),
         "source_api_url": api.api_root.rstrip("/") + f"/courses/{course_id}",
     }
-    atomic_write(out_dir / "course_metadata.json", json_dumps_stable(metadata))
-
     # Course settings blob
     settings = api.get(f"courses/{course_id}/settings")
     if not isinstance(settings, dict):
         raise TypeError("Expected settings dict from Canvas API")
 
+    metadata["settings"] = settings
+    atomic_write(out_dir / "course_metadata.json", json_dumps_stable(metadata))
     atomic_write(out_dir / "course_settings.json", json_dumps_stable(settings))
     
     #syllabus html
