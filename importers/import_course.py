@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
 
@@ -180,4 +181,306 @@ def import_course(
                 break
 
     log.info("Programmatic import complete", extra={"counts": counts, "errors": len(errors)})
+
+    try:
+        _postprocess_html_content(
+            canvas=canvas,
+            export_root=export_root,
+            target_course_id=target_course_id,
+            id_map=id_map,
+        )
+    except Exception as exc:
+        log.warning("HTML post-processing skipped", extra={"error": str(exc)})
+
     return {"counts": counts, "errors": errors}
+
+
+def _normalize_numeric_map(raw: Dict[Any, Any] | None) -> Dict[int, int]:
+    normalized: Dict[int, int] = {}
+    for key, value in (raw or {}).items():
+        try:
+            old_id = int(key)
+        except (TypeError, ValueError):
+            continue
+        try:
+            new_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        normalized[old_id] = new_id
+    return normalized
+
+
+def _replace_numeric_links(
+    html: str,
+    *,
+    resource: str,
+    mapping: Dict[int, int],
+    source_course_id: int,
+    target_course_id: int,
+    include_global: bool = False,
+) -> str:
+    if not mapping:
+        return html
+
+    def _lookup(old: str) -> Optional[int]:
+        try:
+            old_int = int(old)
+        except (TypeError, ValueError):
+            return None
+        return mapping.get(old_int)
+
+    def _sub(pattern: re.Pattern[str], text: str) -> str:
+        def _repl(match: re.Match[str]) -> str:
+            prefix = match.group("prefix")
+            old_id = match.group("id")
+            tail = match.group("tail") or ""
+            new_id = _lookup(old_id)
+            if new_id is None:
+                return match.group(0)
+            return f"{prefix}{target_course_id}/{resource}/{new_id}{tail}"
+
+        return pattern.sub(_repl, text)
+
+    course_pattern = re.compile(
+        rf'(?P<prefix>(?:https?://[^"\'\s]+)?/courses/){source_course_id}/{resource}/(?P<id>\d+)(?P<tail>[^"\'\s]*)'
+    )
+    html = _sub(course_pattern, html)
+
+    api_pattern = re.compile(
+        rf'(?P<prefix>(?:https?://[^"\'\s]+)?/api/v1/courses/){source_course_id}/{resource}/(?P<id>\d+)(?P<tail>[^"\'\s]*)'
+    )
+    html = _sub(api_pattern, html)
+
+    if include_global:
+        global_pattern = re.compile(
+            rf'(?P<prefix>(?:https?://[^"\'\s]+)?/(?!courses/)[^"\'\s]*/{resource}/)(?P<id>\d+)(?P<tail>[^"\'\s]*)'
+        )
+
+        def _global_repl(match: re.Match[str]) -> str:
+            prefix = match.group("prefix")
+            old_id = match.group("id")
+            tail = match.group("tail") or ""
+            new_id = _lookup(old_id)
+            if new_id is None:
+                return match.group(0)
+            return f"{prefix}{new_id}{tail}"
+
+        html = global_pattern.sub(_global_repl, html)
+
+    return html
+
+
+def rewrite_canvas_links(
+    html: str,
+    *,
+    source_course_id: int,
+    target_course_id: int,
+    id_map: Dict[str, Dict[Any, Any]],
+) -> str:
+    if not html:
+        return html
+
+    result = html
+
+    files_map = _normalize_numeric_map(id_map.get("files"))
+    assignments_map = _normalize_numeric_map(id_map.get("assignments"))
+    quizzes_map = _normalize_numeric_map(id_map.get("quizzes"))
+    discussions_map = _normalize_numeric_map(id_map.get("discussions"))
+    modules_map = _normalize_numeric_map(id_map.get("modules"))
+    page_slug_map = id_map.get("pages_url") or {}
+
+    result = _replace_numeric_links(
+        result,
+        resource="files",
+        mapping=files_map,
+        source_course_id=source_course_id,
+        target_course_id=target_course_id,
+        include_global=True,
+    )
+    result = _replace_numeric_links(
+        result,
+        resource="assignments",
+        mapping=assignments_map,
+        source_course_id=source_course_id,
+        target_course_id=target_course_id,
+    )
+    result = _replace_numeric_links(
+        result,
+        resource="quizzes",
+        mapping=quizzes_map,
+        source_course_id=source_course_id,
+        target_course_id=target_course_id,
+    )
+    result = _replace_numeric_links(
+        result,
+        resource="discussion_topics",
+        mapping=discussions_map,
+        source_course_id=source_course_id,
+        target_course_id=target_course_id,
+    )
+    result = _replace_numeric_links(
+        result,
+        resource="modules",
+        mapping=modules_map,
+        source_course_id=source_course_id,
+        target_course_id=target_course_id,
+    )
+
+    if page_slug_map:
+        page_pattern = re.compile(
+            rf'(?P<prefix>(?:https?://[^"\'\s]+)?/courses/){source_course_id}/pages/(?P<slug>[\w\-]+)(?P<tail>[^"\'\s]*)'
+        )
+
+        def _page_repl(match: re.Match[str]) -> str:
+            prefix = match.group("prefix")
+            old_slug = match.group("slug")
+            tail = match.group("tail") or ""
+            new_slug = page_slug_map.get(old_slug)
+            if not new_slug:
+                return match.group(0)
+            return f"{prefix}{target_course_id}/pages/{new_slug}{tail}"
+
+        result = page_pattern.sub(_page_repl, result)
+
+        page_api_pattern = re.compile(
+            rf'(?P<prefix>(?:https?://[^"\'\s]+)?/api/v1/courses/){source_course_id}/pages/(?P<slug>[\w\-]+)(?P<tail>[^"\'\s]*)'
+        )
+
+        def _page_api_repl(match: re.Match[str]) -> str:
+            prefix = match.group("prefix")
+            old_slug = match.group("slug")
+            tail = match.group("tail") or ""
+            new_slug = page_slug_map.get(old_slug)
+            if not new_slug:
+                return match.group(0)
+            return f"{prefix}{target_course_id}/pages/{new_slug}{tail}"
+
+        result = page_api_pattern.sub(_page_api_repl, result)
+
+    return result
+
+
+def _read_html_candidate(paths: list[Path]) -> Optional[str]:
+    for candidate in paths:
+        try:
+            return candidate.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+    return None
+
+
+def _postprocess_html_content(
+    *,
+    canvas: CanvasLike,
+    export_root: Path,
+    target_course_id: int,
+    id_map: Dict[str, Dict[Any, Any]],
+) -> None:
+    course_meta_path = export_root / "course" / "course_metadata.json"
+    source_course_id: Optional[int] = None
+    if course_meta_path.exists():
+        try:
+            meta = json.loads(course_meta_path.read_text(encoding="utf-8"))
+            source_course_id = int(meta.get("id")) if meta.get("id") is not None else None
+        except Exception:
+            source_course_id = None
+    if source_course_id is None:
+        try:
+            source_course_id = int(export_root.name)
+        except Exception:
+            return
+
+    pages_root = export_root / "pages"
+    page_slug_map = id_map.get("pages_url") or {}
+    if pages_root.exists():
+        for meta_path in pages_root.rglob("page_metadata.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            old_slug = meta.get("url")
+            if not isinstance(old_slug, str):
+                continue
+            new_slug = page_slug_map.get(old_slug) or old_slug
+
+            html_path = meta.get("html_path")
+            candidates = []
+            if isinstance(html_path, str) and html_path:
+                candidates.append(export_root / html_path)
+            candidates.append(meta_path.parent / "index.html")
+            candidates.append(meta_path.parent / "body.html")
+
+            original_html = _read_html_candidate(candidates)
+            if not original_html:
+                continue
+
+            rewritten = rewrite_canvas_links(
+                original_html,
+                source_course_id=source_course_id,
+                target_course_id=target_course_id,
+                id_map=id_map,
+            )
+            if rewritten == original_html:
+                continue
+
+            try:
+                canvas.put(
+                    f"/api/v1/courses/{target_course_id}/pages/{new_slug}",
+                    json={"wiki_page": {"body": rewritten}},
+                )
+            except Exception:
+                continue
+
+    assignments_root = export_root / "assignments"
+    assignment_map = _normalize_numeric_map(id_map.get("assignments"))
+    if assignments_root.exists() and assignment_map:
+        for meta_path in assignments_root.rglob("assignment_metadata.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            old_id = meta.get("id")
+            try:
+                old_id_int = int(old_id)
+            except (TypeError, ValueError):
+                continue
+            new_id = assignment_map.get(old_id_int)
+            if new_id is None:
+                continue
+
+            html_path = meta.get("html_path")
+            candidates = []
+            if isinstance(html_path, str) and html_path:
+                candidates.append(export_root / html_path)
+            dir_path = meta_path.parent
+            candidates.extend(
+                [
+                    dir_path / "description.html",
+                    dir_path / "index.html",
+                    dir_path / "body.html",
+                    dir_path / "message.html",
+                ]
+            )
+
+            original_html = _read_html_candidate(candidates)
+            if original_html is None:
+                continue
+
+            rewritten = rewrite_canvas_links(
+                original_html,
+                source_course_id=source_course_id,
+                target_course_id=target_course_id,
+                id_map=id_map,
+            )
+            if rewritten == original_html:
+                continue
+
+            try:
+                canvas.put(
+                    f"/api/v1/courses/{target_course_id}/assignments/{new_id}",
+                    json={"assignment": {"description": rewritten}},
+                )
+            except Exception:
+                continue
