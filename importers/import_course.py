@@ -169,6 +169,7 @@ def import_course(
                     target_course_id=target_course_id, 
                     export_root=export_root, 
                     canvas=canvas,
+                    id_map=id_map,
                 )
 
             else:

@@ -116,3 +116,34 @@ def test_blueprint_sync_optional(tmp_path, requests_mock):
     # This call doesn't bump "updated" (we only count PUTs), but should hit the POST.
     assert isinstance(counts, dict)
     assert post_bp.called
+
+
+def test_maps_course_image_with_id_map(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    meta = {
+        "name": "Design 200",
+        "image_id": 111,
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/333", json={"ok": True}, status_code=200
+    )
+
+    counts = import_course_settings(
+        target_course_id=333,
+        export_root=export_root,
+        canvas=canvas,
+        id_map={"files": {111: 999}},
+    )
+
+    assert counts["updated"] >= 1
+    assert put_course.called
+    body = put_course.last_request.json()
+    assert body["course"]["image_id"] == 999
+    assert body["course"]["image_url"] is None

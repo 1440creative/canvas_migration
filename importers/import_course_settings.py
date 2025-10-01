@@ -37,11 +37,24 @@ def _full_url(base: str, endpoint: str) -> str:
     return f"{base}{endpoint}"
 
 
+def _normalize_int_map(raw: Optional[Dict[Any, Any]]) -> Dict[int, int]:
+    normalized: Dict[int, int] = {}
+    for k, v in (raw or {}).items():
+        try:
+            old_id = int(k)
+            new_id = int(v)
+        except (TypeError, ValueError):
+            continue
+        normalized[old_id] = new_id
+    return normalized
+
+
 def import_course_settings(
     *,
     target_course_id: int,
     export_root: Path,
     canvas,
+    id_map: Optional[Dict[str, Dict[Any, Any]]] = None,
     queue_blueprint_sync: bool = False,
     blueprint_sync_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, int]:
@@ -72,15 +85,56 @@ def import_course_settings(
         meta = _read_json(meta_path)
 
         # Fields accepted by /courses/:id
-        course_fields_keys = {
-            "name",
-            "course_code",
+        field_map = {
+            "name": "name",
+            "course_code": "course_code",
+            "account_id": "account_id",
+            "start_at": "start_at",
+            "end_at": "end_at",
+            "sis_course_id": "sis_course_id",
+            "term_id": "enrollment_term_id",
+            "is_blueprint": "is_blueprint_course",
+            "default_view": "default_view",
+            "time_zone": "time_zone",
+            "locale": "locale",
+            "is_public": "is_public",
+            "public_syllabus": "public_syllabus",
+        }
+
+        course_fields: Dict[str, Any] = {}
+        for src, dest in field_map.items():
+            value = meta.get(src)
+            if value is not None:
+                course_fields[dest] = value
+
+        for key in (
             "blueprint",
             "blueprint_restrictions",
             "use_blueprint_restrictions_by_object_type",
             "blueprint_restrictions_by_object_type",
-        }
-        course_fields = {k: v for k, v in meta.items() if k in course_fields_keys}
+        ):
+            if meta.get(key) is not None:
+                course_fields[key] = meta[key]
+
+        # Rewrite course image using file id_map when available
+        files_map = _normalize_int_map((id_map or {}).get("files"))
+        image_id = meta.get("image_id") or meta.get("image_id_str")
+        try:
+            old_image_id = int(image_id) if image_id is not None else None
+        except (TypeError, ValueError):
+            old_image_id = None
+
+        if old_image_id is not None:
+            new_image_id = files_map.get(old_image_id)
+            if new_image_id is not None:
+                course_fields["image_id"] = new_image_id
+                # Clear stale URL so Canvas rebuilds from new image
+                course_fields["image_url"] = None
+            else:
+                lg.warning(
+                    "Course image %s not found in files id_map; leaving image unchanged",
+                    old_image_id,
+                )
 
         # PUT /courses/:id (hit the mocked URL)
         if course_fields:

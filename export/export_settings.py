@@ -64,6 +64,18 @@ def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) ->
         "start_at": course.get("start_at"),
         "end_at": course.get("end_at"),
         "is_blueprint": bool(course.get("blueprint") or course.get("is_blueprint")),
+        "default_view": course.get("default_view"),
+        "time_zone": course.get("time_zone"),
+        "locale": course.get("locale"),
+        "is_public": course.get("is_public"),
+        "public_syllabus": course.get("public_syllabus"),
+        "image_id": course.get("image_id"),
+        "image_url": course.get("image_url"),
+        "blueprint": course.get("blueprint"),
+        "blueprint_restrictions": course.get("blueprint_restrictions"),
+        "use_blueprint_restrictions_by_object_type": course.get("use_blueprint_restrictions_by_object_type"),
+        "blueprint_restrictions_by_object_type": course.get("blueprint_restrictions_by_object_type"),
+        "default_wiki_page_title": course.get("default_wiki_page_title"),
         "source_api_url": api.api_root.rstrip("/") + f"/courses/{course_id}",
     }
     # Course settings blob
