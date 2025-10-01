@@ -95,6 +95,9 @@ def import_course(
     id_map_path: Optional[Path] = None,
     include_quiz_questions: bool = False,
     continue_on_error: bool = True,
+    auto_term_name: Optional[str] = "Default",
+    auto_term_id: Optional[int] = None,
+    force_course_dates: bool = True,
 ) -> Dict[str, Any]:
     """
     Programmatic aggregator for the whole import pipeline.
@@ -170,6 +173,10 @@ def import_course(
                     export_root=export_root, 
                     canvas=canvas,
                     id_map=id_map,
+                    auto_set_term=bool(auto_term_name),
+                    term_name=auto_term_name or "",
+                    term_id=auto_term_id,
+                    force_course_dates=force_course_dates,
                 )
 
             else:

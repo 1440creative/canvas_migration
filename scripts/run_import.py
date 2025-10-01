@@ -58,6 +58,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--id-map", type=Path, default=None,
                     help="Override path to id_map.json (default: <export-root>/id_map.json)")
     ap.add_argument("--include-quiz-questions", action="store_true", help="Also import quiz questions.")
+    ap.add_argument("--term-name", default="Default",
+                    help="Enrollment term name to assign in the target course (default: 'Default'). Use empty string to skip.")
+    ap.add_argument("--term-id", type=int, default=None,
+                    help="Explicit enrollment term ID to assign (overrides --term-name lookup).")
+    ap.add_argument("--no-auto-term", action="store_true",
+                    help="Disable automatic enrollment term reassignment.")
+    ap.add_argument("--no-course-dates", action="store_true",
+                    help="Do not force participation to 'Course' (restrict_enrollments_to_course_dates=false).")
     ap.add_argument("--dry-run", action="store_true", help="Plan counts only; no API calls.")
     ap.add_argument("--summary-json", type=Path, default=None,
                     help="If provided, write a JSON summary of the run here.")
@@ -104,6 +112,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         id_map_path=id_map_path,
         include_quiz_questions=args.include_quiz_questions,
         continue_on_error=True,
+        auto_term_name=None if args.no_auto_term or not args.term_name else args.term_name,
+        auto_term_id=args.term_id,
+        force_course_dates=not args.no_course_dates,
     )
 
     # Persist id_map after a real run (import_course already saves step-by-step,

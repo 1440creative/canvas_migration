@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import requests
 from logging_setup import get_logger
 
 # Safe module-level logger (no course id at import time)
 log = get_logger(artifact="course_settings", course_id="-")
+
+
+_TERM_CACHE: Dict[Tuple[int, str], Optional[int]] = {}
 
 
 def _read_json(p: Path) -> dict:
@@ -49,12 +52,66 @@ def _normalize_int_map(raw: Optional[Dict[Any, Any]]) -> Dict[int, int]:
     return normalized
 
 
+def _fetch_json(base: str, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    url = _full_url(base, endpoint)
+    resp = requests.get(url, params=params)
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def _resolve_term_id(base: str, account_id: int, term_name: str, lg) -> Optional[int]:
+    if account_id is None or not term_name:
+        return None
+
+    key = (account_id, term_name)
+    if key in _TERM_CACHE:
+        return _TERM_CACHE[key]
+
+    try:
+        data = _fetch_json(
+            base,
+            f"/v1/accounts/{account_id}/terms",
+            params={"enrollment_term[name]": term_name},
+        )
+        terms = data.get("enrollment_terms") or data.get("terms") or []
+        for term in terms:
+            if not isinstance(term, dict):
+                continue
+            name = term.get("name") or ""
+            if name.strip().lower() == term_name.strip().lower():
+                term_id = term.get("id")
+                if term_id is not None:
+                    _TERM_CACHE[key] = int(term_id)
+                    return _TERM_CACHE[key]
+        lg.warning(
+            "Term '%s' not found for account %s; leaving enrollment_term_id unchanged",
+            term_name,
+            account_id,
+        )
+    except Exception as exc:
+        lg.warning(
+            "Failed to resolve term '%s' for account %s: %s",
+            term_name,
+            account_id,
+            exc,
+        )
+    _TERM_CACHE[key] = None
+    return None
+
+
 def import_course_settings(
     *,
     target_course_id: int,
     export_root: Path,
     canvas,
     id_map: Optional[Dict[str, Dict[Any, Any]]] = None,
+    auto_set_term: bool = True,
+    term_name: str = "Default",
+    term_id: Optional[int] = None,
+    force_course_dates: bool = True,
     queue_blueprint_sync: bool = False,
     blueprint_sync_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, int]:
@@ -81,9 +138,11 @@ def import_course_settings(
 
     # --- 1) course metadata -> two endpoints
     meta_path = course_dir / "course_metadata.json"
-    if meta_path.exists():
-        meta = _read_json(meta_path)
+    meta = _read_json(meta_path) if meta_path.exists() else {}
 
+    course_fields: Dict[str, Any] = {}
+
+    if meta:
         # Fields accepted by /courses/:id
         field_map = {
             "name": "name",
@@ -100,7 +159,6 @@ def import_course_settings(
             "public_syllabus": "public_syllabus",
         }
 
-        course_fields: Dict[str, Any] = {}
         for src, dest in field_map.items():
             value = meta.get(src)
             if value is not None:
@@ -144,21 +202,44 @@ def import_course_settings(
                     image_filename or "unknown filename",
                 )
 
-        # PUT /courses/:id (hit the mocked URL)
-        if course_fields:
-            url = _full_url(base, f"/v1/courses/{target_course_id}")
-            lg.debug("PUT /courses/%s from course_metadata.json", target_course_id)
-            # Canvas expects course-level updates wrapped in {"course": {...}}
-            requests.put(url, json={"course": course_fields})
-            counts["updated"] += 1
+    # Resolve enrollment term if requested
+    resolved_term_id = None
+    if auto_set_term:
+        resolved_term_id = term_id
+        account_id = None
+        try:
+            course_info = _fetch_json(base, f"/v1/courses/{target_course_id}")
+            account_id = course_info.get("account_id")
+        except Exception as exc:
+            lg.warning("Failed to load target course metadata: %s", exc)
 
-        # PUT /courses/:id/settings if present
-        settings = meta.get("settings")
-        if isinstance(settings, dict) and settings:
-            url = _full_url(base, f"/v1/courses/{target_course_id}/settings")
-            lg.debug("PUT /courses/%s/settings", target_course_id)
-            requests.put(url, json=settings)
-            counts["updated"] += 1
+        if account_id is None:
+            account_id = meta.get("account_id")
+
+        if resolved_term_id is None and account_id is not None and term_name:
+            resolved_term_id = _resolve_term_id(base, int(account_id), term_name, lg)
+
+        if resolved_term_id is not None:
+            course_fields["enrollment_term_id"] = int(resolved_term_id)
+
+    if force_course_dates:
+        course_fields["restrict_enrollments_to_course_dates"] = True
+
+    # PUT /courses/:id (hit the mocked URL)
+    if course_fields:
+        url = _full_url(base, f"/v1/courses/{target_course_id}")
+        lg.debug("PUT /courses/%s from course_metadata.json", target_course_id)
+        # Canvas expects course-level updates wrapped in {"course": {...}}
+        requests.put(url, json={"course": course_fields})
+        counts["updated"] += 1
+
+    # PUT /courses/:id/settings if present
+    settings = meta.get("settings")
+    if isinstance(settings, dict) and settings:
+        url = _full_url(base, f"/v1/courses/{target_course_id}/settings")
+        lg.debug("PUT /courses/%s/settings", target_course_id)
+        requests.put(url, json=settings)
+        counts["updated"] += 1
 
     # --- 2) syllabus HTML
     syllabus_html = course_dir / "syllabus.html"

@@ -34,7 +34,11 @@ def test_puts_course_fields_and_settings(tmp_path, requests_mock):
     )
 
     counts = import_course_settings(
-        target_course_id=222, export_root=export_root, canvas=canvas
+        target_course_id=222,
+        export_root=export_root,
+        canvas=canvas,
+        auto_set_term=False,
+        force_course_dates=False,
     )
 
     assert counts["updated"] >= 2
@@ -59,7 +63,11 @@ def test_puts_syllabus_html(tmp_path, requests_mock):
     )
 
     counts = import_course_settings(
-        target_course_id=222, export_root=export_root, canvas=canvas
+        target_course_id=222,
+        export_root=export_root,
+        canvas=canvas,
+        auto_set_term=False,
+        force_course_dates=False,
     )
 
     assert counts["updated"] >= 1
@@ -86,7 +94,11 @@ def test_sets_default_view_and_front_page(tmp_path, requests_mock):
     )
 
     counts = import_course_settings(
-        target_course_id=222, export_root=export_root, canvas=canvas
+        target_course_id=222,
+        export_root=export_root,
+        canvas=canvas,
+        auto_set_term=False,
+        force_course_dates=False,
     )
 
     # Expect two updates (default_view + front_page)
@@ -111,6 +123,8 @@ def test_blueprint_sync_optional(tmp_path, requests_mock):
         target_course_id=222,
         export_root=export_root,
         canvas=canvas,
+        auto_set_term=False,
+        force_course_dates=False,
         queue_blueprint_sync=True,
         blueprint_sync_options={"copy_settings": True, "publish_after_migration": True},
     )
@@ -142,6 +156,8 @@ def test_maps_course_image_with_id_map(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         id_map={"files": {111: 999}},
+        auto_set_term=False,
+        force_course_dates=False,
     )
 
     assert counts["updated"] >= 1
@@ -149,3 +165,42 @@ def test_maps_course_image_with_id_map(tmp_path, requests_mock):
     body = put_course.last_request.json()
     assert body["course"]["image_id"] == 999
     assert body["course"]["image_url"] is None
+
+
+def test_auto_term_and_course_participation(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    meta = {"name": "History", "account_id": 42}
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    # Mock course lookup and term lookup
+    requests_mock.get(
+        f"{api_base}/api/v1/courses/444",
+        json={"id": 444, "account_id": 42},
+        status_code=200,
+    )
+    requests_mock.get(
+        f"{api_base}/api/v1/accounts/42/terms",
+        json={"enrollment_terms": [{"id": 314, "name": "Default"}]},
+        status_code=200,
+    )
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/444", json={"ok": True}, status_code=200
+    )
+
+    import_course_settings(
+        target_course_id=444,
+        export_root=export_root,
+        canvas=canvas,
+        id_map={},
+    )
+
+    body = put_course.last_request.json()
+    course_payload = body["course"]
+    assert course_payload["enrollment_term_id"] == 314
+    assert course_payload["restrict_enrollments_to_course_dates"] is True

@@ -49,6 +49,8 @@ def test_import_course_settings_blueprint_fields_and_sync(tmp_path, requests_moc
         target_course_id=222,
         export_root=export_root,
         canvas=canvas,
+        auto_set_term=False,
+        force_course_dates=False,
         queue_blueprint_sync=True,
         blueprint_sync_options={"send_notification": True, "comment": "Sync me"},
     )
