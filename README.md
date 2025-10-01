@@ -13,7 +13,7 @@ The fastest way to confirm everything works is to run a **dry-run** against the 
 ```bash
 git clone git@github.com:1440creative/canvas_migration.git
 cd canvas_migration
-pip install -e .
+pip install -r requirements.txt
 ```
 
 ### 2. Set up environment
