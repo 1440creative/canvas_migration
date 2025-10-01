@@ -12,10 +12,26 @@ def test_export_course_settings(tmp_path: Path):
     api = CanvasAPI("https://canvas.test", "tkn")
 
     with requests_mock.Mocker() as m:
-        m.get(f"https://canvas.test/api/v1/courses/{course_id}",
-              json={"id": course_id, "uuid": "abc", "name": "Demo", "course_code": "DEMO",
-                    "enrollment_term_id": 55, "account_id": 1, "workflow_state": "available",
-                    "start_at": None, "end_at": None, "blueprint": False})
+        m.get(
+            f"https://canvas.test/api/v1/courses/{course_id}",
+            json={
+                "id": course_id,
+                "uuid": "abc",
+                "name": "Demo",
+                "course_code": "DEMO",
+                "enrollment_term_id": 55,
+                "account_id": 1,
+                "workflow_state": "available",
+                "start_at": None,
+                "end_at": None,
+                "blueprint": False,
+                "image_id": 4321,
+            },
+        )
+        m.get(
+            "https://canvas.test/api/v1/files/4321",
+            json={"filename": "course-card.png", "display_name": "Course Card"},
+        )
         m.get(f"https://canvas.test/api/v1/courses/{course_id}/settings",
               json={"allow_student_forum_attachments": True, "blueprint": False})
 
@@ -25,4 +41,6 @@ def test_export_course_settings(tmp_path: Path):
     md = json.loads((root / str(course_id) / "course" / "course_metadata.json").read_text("utf-8"))
     st = json.loads((root / str(course_id) / "course" / "course_settings.json").read_text("utf-8"))
     assert md["id"] == course_id
+    assert md["course_image_filename"] == "course-card.png"
+    assert md["course_image_display_name"] == "Course Card"
     assert st["allow_student_forum_attachments"] is True

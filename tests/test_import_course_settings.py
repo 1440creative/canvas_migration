@@ -40,6 +40,8 @@ def test_puts_course_fields_and_settings(tmp_path, requests_mock):
     assert counts["updated"] >= 2
     assert put_course.called
     assert put_settings.called
+    body = put_course.last_request.json()
+    assert "account_id" not in body.get("course", {})
 
 
 def test_puts_syllabus_html(tmp_path, requests_mock):

@@ -88,7 +88,6 @@ def import_course_settings(
         field_map = {
             "name": "name",
             "course_code": "course_code",
-            "account_id": "account_id",
             "start_at": "start_at",
             "end_at": "end_at",
             "sis_course_id": "sis_course_id",
@@ -124,16 +123,25 @@ def import_course_settings(
         except (TypeError, ValueError):
             old_image_id = None
 
+        image_filename = meta.get("course_image_filename") or meta.get("course_image_display_name")
+
         if old_image_id is not None:
             new_image_id = files_map.get(old_image_id)
             if new_image_id is not None:
                 course_fields["image_id"] = new_image_id
                 # Clear stale URL so Canvas rebuilds from new image
                 course_fields["image_url"] = None
+                lg.info(
+                    "Remapped course image %s → %s (%s)",
+                    old_image_id,
+                    new_image_id,
+                    image_filename or "unknown filename",
+                )
             else:
                 lg.warning(
-                    "Course image %s not found in files id_map; leaving image unchanged",
+                    "Course image %s (%s) not found in files id_map; leaving image unchanged",
                     old_image_id,
+                    image_filename or "unknown filename",
                 )
 
         # PUT /courses/:id (hit the mocked URL)

@@ -78,6 +78,17 @@ def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) ->
         "default_wiki_page_title": course.get("default_wiki_page_title"),
         "source_api_url": api.api_root.rstrip("/") + f"/courses/{course_id}",
     }
+
+    image_id = metadata.get("image_id")
+    if image_id:
+        try:
+            file_detail = api.get(f"files/{image_id}")
+            if isinstance(file_detail, dict):
+                metadata["course_image_filename"] = file_detail.get("filename")
+                metadata["course_image_display_name"] = file_detail.get("display_name")
+        except Exception:
+            # optional info only; ignore errors
+            pass
     # Course settings blob
     settings = api.get(f"courses/{course_id}/settings")
     if not isinstance(settings, dict):
