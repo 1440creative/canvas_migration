@@ -92,6 +92,8 @@ python scripts/run_import.py \
   --blueprint-sync \
   -vv
 ```
+Blueprint status is exported so you can review the original course configuration, but enabling or managing blueprints in the target account still requires a manual step.
+
 After a successful run the importer automatically rewrites page and assignment HTML so links to the source course (files, assignments, quizzes, discussions, modules, pages) are updated to the new target IDs using the generated `id_map.json`. No manual link cleanup is required as long as pages, assignments, files, quizzes, discussions, and modules are included in the import.
 
 
