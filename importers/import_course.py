@@ -10,7 +10,7 @@ import requests
 from logging_setup import get_logger
 
 # Import steps supported by the importer 
-ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "modules", "rubrics", "rubric_links", "course"]
+ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "announcements", "modules", "rubrics", "rubric_links", "course"]
 
 
 class CanvasLike(Protocol):
@@ -109,6 +109,7 @@ def import_course(
     from importers.import_quizzes import import_quizzes
     from importers.import_files import import_files
     from importers.import_discussions import import_discussions
+    from importers.import_announcements import import_announcements
     from importers.import_modules import import_modules
     from importers.import_course_settings import import_course_settings
     from importers.import_rubrics import import_rubrics
@@ -144,6 +145,10 @@ def import_course(
 
             elif step == "discussions":
                 import_discussions(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
+                save_id_map(id_map_path, id_map)
+
+            elif step == "announcements":
+                import_announcements(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
                 save_id_map(id_map_path, id_map)
 
             elif step == "modules":

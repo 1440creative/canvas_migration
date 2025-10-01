@@ -63,8 +63,9 @@ id_map keys present: none
 3. quizzes (optionally questions)
 4. files
 5. discussions
-6. modules
-7. course settings (optionally blueprint sync)
+6. announcements
+7. modules
+8. course settings (optionally blueprint sync)
 
 ---
 
