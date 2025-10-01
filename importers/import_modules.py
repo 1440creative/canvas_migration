@@ -131,6 +131,52 @@ def _make_item_payload(
             }
         }, None)
 
+    if t == "Quiz":
+        src_id = item.get("content_id")
+        if src_id is None:
+            return (None, "missing content_id")
+        new_id = id_map.get("quizzes", {}).get(src_id)
+        if not isinstance(new_id, int):
+            return (None, "no quiz id mapping")
+        return ({
+            "module_item": {
+                "type": "Quiz",
+                "title": title,
+                "content_id": new_id,
+                "published": published,
+                "position": position,
+            }
+        }, None)
+
+    if t in {"Discussion", "DiscussionTopic"}:
+        src_id = item.get("content_id")
+        if src_id is None:
+            return (None, "missing content_id")
+        new_id = id_map.get("discussions", {}).get(src_id)
+        if not isinstance(new_id, int):
+            return (None, "no discussion id mapping")
+        return ({
+            "module_item": {
+                "type": "Discussion",
+                "title": title,
+                "content_id": new_id,
+                "published": published,
+                "position": position,
+            }
+        }, None)
+
+    if t == "SubHeader":
+        if not title:
+            return (None, "missing title")
+        return ({
+            "module_item": {
+                "type": "SubHeader",
+                "title": title,
+                "published": published,
+                "position": position,
+            }
+        }, None)
+
     if t == "ExternalUrl":
         ext = item.get("external_url")
         if not ext:
@@ -178,6 +224,8 @@ def import_modules(
     id_map.setdefault("modules", {})
     id_map.setdefault("pages_url", {})
     id_map.setdefault("assignments", {})
+    id_map.setdefault("quizzes", {})
+    id_map.setdefault("discussions", {})
 
     api_root = (getattr(canvas, "api_root", "") or "").rstrip("/")
 
