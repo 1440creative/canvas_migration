@@ -79,6 +79,41 @@ def export_assignments(course_id: int, export_root: Path, api: CanvasAPI) -> Lis
             "source_api_url": api.api_root.rstrip("/") + f"/courses/{course_id}/assignments/{aid}",
         }
 
+        optional_fields = [
+            "lock_at",
+            "unlock_at",
+            "grading_type",
+            "submission_types",
+            "allowed_attempts",
+            "peer_reviews",
+            "automatic_peer_reviews",
+            "peer_review_count",
+            "peer_reviews_assign_at",
+            "group_category_id",
+            "group_assignment",
+            "notify_of_update",
+            "muted",
+            "grading_standard_id",
+            "omit_from_final_grade",
+            "only_visible_to_overrides",
+            "moderated_grading",
+            "grader_count",
+            "grader_selection_strategy",
+            "intra_group_peer_reviews",
+            "anonymous_peer_reviews",
+            "anonymous_grading",
+            "grade_group_students_individually",
+            "anonymous_submissions",
+            "assignment_group_id",
+            "external_tool_tag_attributes",
+            "turnitin_enabled",
+            "vericite_enabled",
+        ]
+
+        for key in optional_fields:
+            if key in detail and detail[key] is not None:
+                meta[key] = detail[key]
+
         atomic_write(a_dir / "assignment_metadata.json", json_dumps_stable(meta))
         exported.append(meta)
 

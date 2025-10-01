@@ -17,9 +17,23 @@ def test_export_assignments_basic(tmp_path: Path):
         m.get(f"https://canvas.test/api/v1/courses/{course_id}/assignments",
               json=[{"id": 55, "name": "Essay 1", "position": 2, "published": True}])
         # detail
-        m.get(f"https://canvas.test/api/v1/courses/{course_id}/assignments/55",
-              json={"id": 55, "name": "Essay 1", "description": "<p>Write stuff</p>",
-                    "published": True, "due_at": None, "points_possible": 100.0})
+        m.get(
+            f"https://canvas.test/api/v1/courses/{course_id}/assignments/55",
+            json={
+                "id": 55,
+                "name": "Essay 1",
+                "description": "<p>Write stuff</p>",
+                "published": True,
+                "due_at": None,
+                "points_possible": 100.0,
+                "grading_type": "points",
+                "submission_types": ["online_upload"],
+                "allowed_attempts": 3,
+                "peer_reviews": True,
+                "group_category_id": 42,
+                "grade_group_students_individually": False,
+            },
+        )
 
         metas = export_assignments(course_id, root, api)
 
@@ -29,3 +43,8 @@ def test_export_assignments_basic(tmp_path: Path):
     meta = json.loads((a_dir / "assignment_metadata.json").read_text(encoding="utf-8"))
     assert metas[0]["id"] == 55
     assert meta["module_item_ids"] == []
+    assert meta["submission_types"] == ["online_upload"]
+    assert meta["grading_type"] == "points"
+    assert meta["allowed_attempts"] == 3
+    assert meta["peer_reviews"] is True
+    assert meta["group_category_id"] == 42
