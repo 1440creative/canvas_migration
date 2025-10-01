@@ -98,6 +98,8 @@ After a successful run the importer automatically rewrites page and assignment H
 
 By default the importer also assigns the target course to the 'Default' enrollment term and sets participation to Course (restricts enrollments to course dates). Use `--term-name`, `--term-id`, `--no-auto-term`, or `--no-course-dates` when running `scripts/run_import.py` if you need different behaviour.
 
+By default the importer clears SIS identifiers (sis_course_id, integration_id, sis_import_id). You can set new values with `--sis-course-id`, `--integration-id`, or `--sis-import-id` when running `scripts/run_import.py`.
+
 Course hero images are remapped automatically when the original image file was exported and imported—the importer uses `id_map.json` to swap the old image file id for the new one before issuing the final course settings update.
  so links to the source course (files, assignments, quizzes, discussions, modules, pages) are updated to the new target IDs using the generated `id_map.json`. No manual link cleanup is required as long as pages, assignments, files, quizzes, discussions, and modules are included in the import.
 

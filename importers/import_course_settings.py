@@ -112,6 +112,9 @@ def import_course_settings(
     term_name: str = "Default",
     term_id: Optional[int] = None,
     force_course_dates: bool = True,
+    sis_course_id: Optional[str] = None,
+    integration_id: Optional[str] = None,
+    sis_import_id: Optional[str] = None,
     queue_blueprint_sync: bool = False,
     blueprint_sync_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, int]:
@@ -149,7 +152,6 @@ def import_course_settings(
             "course_code": "course_code",
             "start_at": "start_at",
             "end_at": "end_at",
-            "sis_course_id": "sis_course_id",
             "term_id": "enrollment_term_id",
             "is_blueprint": "is_blueprint_course",
             "default_view": "default_view",
@@ -201,6 +203,10 @@ def import_course_settings(
                     old_image_id,
                     image_filename or "unknown filename",
                 )
+
+    course_fields["sis_course_id"] = sis_course_id if sis_course_id is not None else ""
+    course_fields["integration_id"] = integration_id if integration_id is not None else ""
+    course_fields["sis_import_id"] = sis_import_id if sis_import_id is not None else ""
 
     # Resolve enrollment term if requested
     resolved_term_id = None

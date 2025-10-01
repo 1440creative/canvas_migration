@@ -66,6 +66,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Disable automatic enrollment term reassignment.")
     ap.add_argument("--no-course-dates", action="store_true",
                     help="Do not force participation to 'Course' (restrict_enrollments_to_course_dates=false).")
+    ap.add_argument("--sis-course-id", default=None,
+                    help="Set the SIS course ID in the target Canvas (default: blank).")
+    ap.add_argument("--integration-id", default=None,
+                    help="Set the integration_id in the target Canvas (default: blank).")
+    ap.add_argument("--sis-import-id", default=None,
+                    help="Set the sis_import_id in the target Canvas (default: blank).")
     ap.add_argument("--dry-run", action="store_true", help="Plan counts only; no API calls.")
     ap.add_argument("--summary-json", type=Path, default=None,
                     help="If provided, write a JSON summary of the run here.")
@@ -115,6 +121,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         auto_term_name=None if args.no_auto_term or not args.term_name else args.term_name,
         auto_term_id=args.term_id,
         force_course_dates=not args.no_course_dates,
+        sis_course_id=args.sis_course_id,
+        integration_id=args.integration_id,
+        sis_import_id=args.sis_import_id,
     )
 
     # Persist id_map after a real run (import_course already saves step-by-step,

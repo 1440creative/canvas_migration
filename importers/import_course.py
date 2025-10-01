@@ -98,6 +98,9 @@ def import_course(
     auto_term_name: Optional[str] = "Default",
     auto_term_id: Optional[int] = None,
     force_course_dates: bool = True,
+    sis_course_id: Optional[str] = None,
+    integration_id: Optional[str] = None,
+    sis_import_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Programmatic aggregator for the whole import pipeline.
@@ -177,6 +180,9 @@ def import_course(
                     term_name=auto_term_name or "",
                     term_id=auto_term_id,
                     force_course_dates=force_course_dates,
+                    sis_course_id=sis_course_id,
+                    integration_id=integration_id,
+                    sis_import_id=sis_import_id,
                 )
 
             else:

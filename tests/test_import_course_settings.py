@@ -46,6 +46,9 @@ def test_puts_course_fields_and_settings(tmp_path, requests_mock):
     assert put_settings.called
     body = put_course.last_request.json()
     assert "account_id" not in body.get("course", {})
+    assert body["course"]["sis_course_id"] == ""
+    assert body["course"]["integration_id"] == ""
+    assert body["course"]["sis_import_id"] == ""
 
 
 def test_puts_syllabus_html(tmp_path, requests_mock):
@@ -113,6 +116,9 @@ def test_blueprint_sync_optional(tmp_path, requests_mock):
     api_base = "https://api.example.edu"
     canvas = DummyCanvas(api_base)
 
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/222", json={"ok": True}, status_code=200
+    )
     post_bp = requests_mock.post(
         f"{api_base}/api/v1/courses/222/blueprint_templates/default/migrations",
         json={"migration_id": 1},
@@ -204,3 +210,34 @@ def test_auto_term_and_course_participation(tmp_path, requests_mock):
     course_payload = body["course"]
     assert course_payload["enrollment_term_id"] == 314
     assert course_payload["restrict_enrollments_to_course_dates"] is True
+
+
+def test_override_sis_fields(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+    _write(course_dir / "course_metadata.json", json.dumps({"name": "Biology"}))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/555", json={"ok": True}, status_code=200
+    )
+
+    import_course_settings(
+        target_course_id=555,
+        export_root=export_root,
+        canvas=canvas,
+        id_map={},
+        auto_set_term=False,
+        force_course_dates=False,
+        sis_course_id="NEW-SIS",
+        integration_id="integration-123",
+        sis_import_id="import-456",
+    )
+
+    body = put_course.last_request.json()
+    course_payload = body["course"]
+    assert course_payload["sis_course_id"] == "NEW-SIS"
+    assert course_payload["integration_id"] == "integration-123"
+    assert course_payload["sis_import_id"] == "import-456"
