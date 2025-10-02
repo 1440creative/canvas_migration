@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol, Tuple
 
@@ -33,6 +34,43 @@ def _coerce_int(val: Any) -> Optional[int]:
         return int(val) if val is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _collapse_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _summarize_error(detail: Any) -> str:
+    if isinstance(detail, dict):
+        errors = detail.get("errors")
+        if errors:
+            try:
+                return json.dumps(errors)
+            except Exception:
+                return str(errors)
+        try:
+            return json.dumps(detail)
+        except Exception:
+            return str(detail)
+
+    if isinstance(detail, str):
+        snippet = detail.strip()
+        lower = snippet.lower()
+        if "<html" in lower:
+            parts: list[str] = []
+            title_match = re.search(r"<title[^>]*>\s*(.*?)\s*</title>", snippet, re.I | re.S)
+            if title_match:
+                parts.append(f"title={_collapse_ws(title_match.group(1))}")
+            h1_match = re.search(r"<h1[^>]*>\s*(.*?)\s*</h1>", snippet, re.I | re.S)
+            if h1_match:
+                parts.append(f"h1={_collapse_ws(h1_match.group(1))}")
+            if not parts:
+                text_only = re.sub(r"<[^>]+>", " ", snippet)
+                parts.append(_collapse_ws(text_only)[:160])
+            return "; ".join(parts)
+        return _collapse_ws(snippet)[:200]
+
+    return str(detail)
 
 def _resp_json(resp: Any) -> dict:
     """
@@ -145,7 +183,9 @@ def import_quizzes(
 
     # Absolute endpoint base (so requests_mock matches exactly)
     api_root = (getattr(canvas, "api_root", "") or "").rstrip("/")
-    abs_create_base = f"{api_root}/api/v1/courses/{target_course_id}/quizzes"
+    if not api_root.endswith("/api/v1"):
+        api_root = f"{api_root}/api/v1"
+    abs_create_base = f"{api_root}/courses/{target_course_id}/quizzes"
 
     for item in sorted(q_dir.iterdir()):
         if not item.is_dir():
@@ -199,6 +239,19 @@ def import_quizzes(
             log.exception("failed-create title=%s: %s", title, e)
             continue
 
+        status_code = getattr(resp, "status_code", 200)
+        if status_code >= 400:
+            detail_raw = _resp_json(resp) or getattr(resp, "text", "")
+            detail = _summarize_error(detail_raw)
+            counters["failed"] += 1
+            log.error(
+                "failed-create status=%s title=%s detail=%s",
+                status_code,
+                title,
+                detail,
+            )
+            continue
+
         body = _resp_json(resp)
         new_id = _coerce_int(body.get("id"))
 
@@ -212,7 +265,11 @@ def import_quizzes(
 
         if new_id is None:
             counters["failed"] += 1
-            log.error("failed-create (no id) title=%s", title)
+            log.error(
+                "failed-create (no id) title=%s detail=%s",
+                title,
+                _summarize_error(body),
+            )
             continue
 
         # Map old->new when possible

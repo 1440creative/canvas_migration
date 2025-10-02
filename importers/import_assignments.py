@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
+import re
 
 from logging_setup import get_logger
 
@@ -37,6 +38,43 @@ def _choose_description(a_dir: Path, meta: Dict[str, Any]) -> Optional[str]:
         if t is not None:
             return t
     return None
+
+
+def _collapse_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _summarize_error(detail: Any) -> str:
+    if isinstance(detail, dict):
+        errors = detail.get("errors")
+        if errors:
+            try:
+                return json.dumps(errors)
+            except Exception:
+                return str(errors)
+        try:
+            return json.dumps(detail)
+        except Exception:
+            return str(detail)
+
+    if isinstance(detail, str):
+        snippet = detail.strip()
+        lower = snippet.lower()
+        if "<html" in lower:
+            parts: list[str] = []
+            title_match = re.search(r"<title[^>]*>\s*(.*?)\s*</title>", snippet, re.I | re.S)
+            if title_match:
+                parts.append(f"title={_collapse_ws(title_match.group(1))}")
+            h1_match = re.search(r"<h1[^>]*>\s*(.*?)\s*</h1>", snippet, re.I | re.S)
+            if h1_match:
+                parts.append(f"h1={_collapse_ws(h1_match.group(1))}")
+            if not parts:
+                text_only = re.sub(r"<[^>]+>", " ", snippet)
+                parts.append(_collapse_ws(text_only)[:160])
+            return "; ".join(parts)
+        return _collapse_ws(snippet)[:200]
+
+    return str(detail)
 
 
 def _abs_url(api_root: str, endpoint_or_url: str) -> str:
@@ -78,10 +116,9 @@ def _post_assignment(canvas, endpoint_path: str, payload: Dict[str, Any]) -> int
         body = {}
 
     if status and status >= 400:
-        detail = body if isinstance(body, dict) else getattr(r, "text", "")
-        raise RuntimeError(
-            f"Canvas responded {status} {reason or ''} when creating assignment: {detail}"
-        )
+        detail_raw = body if body else getattr(r, "text", "")
+        detail = _summarize_error(detail_raw)
+        raise RuntimeError(f"Canvas responded {status} {reason or ''}: {detail}")
 
     if isinstance(body.get("id"), int):
         return int(body["id"])
@@ -98,7 +135,9 @@ def _post_assignment(canvas, endpoint_path: str, payload: Dict[str, Any]) -> int
         if isinstance(fb.get("id"), int):
             return int(fb["id"])
         if isinstance(fb, dict) and fb.get("errors"):
-            raise RuntimeError(f"Follow-up assignment fetch returned errors: {fb['errors']}")
+            raise RuntimeError(
+                f"Follow-up assignment fetch returned errors: {_summarize_error(fb)}"
+            )
 
     if isinstance(body, dict) and body.get("errors"):
         raise RuntimeError(f"Canvas returned assignment errors: {body['errors']}")
