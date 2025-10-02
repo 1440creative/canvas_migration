@@ -107,6 +107,7 @@ def import_course_settings(
     target_course_id: int,
     export_root: Path,
     canvas,
+    target_account_id: Optional[int] = None,
     id_map: Optional[Dict[str, Dict[Any, Any]]] = None,
     auto_set_term: bool = True,
     term_name: str = "Default",
@@ -212,18 +213,27 @@ def import_course_settings(
     resolved_term_id = None
     if auto_set_term:
         resolved_term_id = term_id
-        account_id = None
-        try:
-            course_info = _fetch_json(base, f"/v1/courses/{target_course_id}")
-            account_id = course_info.get("account_id")
-        except Exception as exc:
-            lg.warning("Failed to load target course metadata: %s", exc)
+        account_id: Optional[int] = target_account_id
+
+        if account_id is None:
+            try:
+                course_info = _fetch_json(base, f"/v1/courses/{target_course_id}")
+                account_id = course_info.get("account_id")  # may be int or str
+            except Exception as exc:
+                lg.warning("Failed to load target course metadata: %s", exc)
 
         if account_id is None:
             account_id = meta.get("account_id")
 
         if resolved_term_id is None and account_id is not None and term_name:
-            resolved_term_id = _resolve_term_id(base, int(account_id), term_name, lg)
+            try:
+                resolved_term_id = _resolve_term_id(base, int(account_id), term_name, lg)
+            except (TypeError, ValueError):
+                lg.warning(
+                    "Unable to parse account id %r when resolving term '%s'",
+                    account_id,
+                    term_name,
+                )
 
         if resolved_term_id is not None:
             course_fields["enrollment_term_id"] = int(resolved_term_id)

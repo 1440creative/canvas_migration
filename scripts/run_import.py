@@ -66,6 +66,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Disable automatic enrollment term reassignment.")
     ap.add_argument("--no-course-dates", action="store_true",
                     help="Do not force participation to 'Course' (restrict_enrollments_to_course_dates=false).")
+    ap.add_argument(
+        "--target-account-id",
+        type=int,
+        default=None,
+        help="Override the Canvas account id to use for term lookups and settings updates.",
+    )
     ap.add_argument("--sis-course-id", default=None,
                     help="Set the SIS course ID in the target Canvas (default: blank).")
     ap.add_argument("--integration-id", default=None,
@@ -124,6 +130,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         sis_course_id=args.sis_course_id,
         integration_id=args.integration_id,
         sis_import_id=args.sis_import_id,
+        target_account_id=args.target_account_id,
     )
 
     # Persist id_map after a real run (import_course already saves step-by-step,
@@ -142,6 +149,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "steps": steps,
             "counts": result.get("counts", {}),
             "errors": result.get("errors", []),
+            "target_account_id": args.target_account_id,
             "id_map_keys": sorted(load_id_map(id_map_path).keys()) if id_map_path.exists() else [],
         }
         args.summary_json.parent.mkdir(parents=True, exist_ok=True)

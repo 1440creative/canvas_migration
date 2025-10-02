@@ -140,6 +140,47 @@ def test_blueprint_sync_optional(tmp_path, requests_mock):
     assert post_bp.called
 
 
+def test_target_account_id_overrides_course_lookup(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    _write(course_dir / "course_metadata.json", json.dumps({"name": "Chemistry"}))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/222", json={"ok": True}, status_code=200
+    )
+
+    get_course = requests_mock.get(
+        f"{api_base}/api/v1/courses/222",
+        json={"id": 222, "account_id": 99},
+        status_code=200,
+    )
+
+    get_terms = requests_mock.get(
+        f"{api_base}/api/v1/accounts/54/terms",
+        json={"enrollment_terms": [{"id": 321, "name": "Default"}]},
+        status_code=200,
+    )
+
+    counts = import_course_settings(
+        target_course_id=222,
+        export_root=export_root,
+        canvas=canvas,
+        target_account_id=54,
+        term_name="Default",
+        force_course_dates=False,
+    )
+
+    assert counts["updated"] >= 1
+    assert not get_course.called  # override skips course metadata fetch
+    assert get_terms.called
+    body = put_course.last_request.json()
+    assert body["course"]["enrollment_term_id"] == 321
+
+
 def test_maps_course_image_with_id_map(tmp_path, requests_mock):
     export_root = tmp_path / "export" / "data" / "101"
     course_dir = export_root / "course"

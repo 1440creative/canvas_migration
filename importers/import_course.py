@@ -101,6 +101,7 @@ def import_course(
     sis_course_id: Optional[str] = None,
     integration_id: Optional[str] = None,
     sis_import_id: Optional[str] = None,
+    target_account_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Programmatic aggregator for the whole import pipeline.
@@ -183,6 +184,7 @@ def import_course(
                     sis_course_id=sis_course_id,
                     integration_id=integration_id,
                     sis_import_id=sis_import_id,
+                    target_account_id=target_account_id,
                 )
 
             else:
