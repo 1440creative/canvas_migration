@@ -96,6 +96,22 @@ Blueprint status is exported so you can review the original course configuration
 
 After a successful run the importer automatically rewrites page and assignment HTML so links to the source course (files, assignments, quizzes, discussions, modules, pages) are updated to the new target IDs using the generated `id_map.json`. No manual link cleanup is required as long as pages, assignments, files, quizzes, discussions, and modules are included in the import.
 
+### Standalone HTML post-processing
+
+If you need to clean up HTML outside the full importer (e.g. running a transform step between export and import, or correcting content after a partial import), run the post-processor directly against the export directory:
+
+```bash
+python scripts/postprocess_html.py \
+  export/data/77275 \
+  --target-course-id 12345
+```
+
+- The script reads `id_map.json` from the export root unless you override it with `--id-map`.
+- `--source-course-id` overrides auto-detection when the export directory name and `course/course_metadata.json` do not contain the original id.
+- Pass `--dry-run` to list which files would change without rewriting them; add `--extra-html path/to/file.html` (repeatable) to include additional files that live outside the export tree.
+
+Re-run the script after any new importer step that updates `id_map.json` so downstream HTML stays aligned with the latest mappings.
+
 By default the importer also assigns the target course to the 'Default' enrollment term and sets participation to Course (restricts enrollments to course dates). Use `--term-name`, `--term-id`, `--no-auto-term`, or `--no-course-dates` when running `scripts/run_import.py` if you need different behaviour.
 
 By default the importer clears SIS identifiers (sis_course_id, integration_id, sis_import_id). You can set new values with `--sis-course-id`, `--integration-id`, or `--sis-import-id` when running `scripts/run_import.py`.
