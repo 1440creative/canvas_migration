@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import requests
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -203,15 +204,26 @@ def import_pages(
         }
 
         # --- Create page (soft-fail to allow slug fallback when no HTTP mocks) ---
+        api_endpoint = f"/api/v1/courses/{target_course_id}/pages"
         try:
+            start_time = time.time()
             resp = canvas.post(
-                f"/api/v1/courses/{target_course_id}/pages",
+                api_endpoint,
                 json=create_payload,
             )
+            log.debug(
+                "page POST complete title=%r status=%s duration=%.2fs",
+                title,
+                getattr(resp, "status_code", "?"),
+                time.time() - start_time,
+            )
         except Exception as e:
-            # In tests like position_warning, DummyCanvas may try a real host (api.test).
-            # Treat this as soft failure: continue with fallback slug logic.
-            log.debug("page create POST failed; using fallback slug (title=%r, err=%s)", title, e)
+            log.debug(
+                "page create POST error title=%r endpoint=%s err=%s",
+                title,
+                api_endpoint,
+                e,
+            )
             resp = {}  # _resp_json will return {}
 
         # Pull out slug and id from response (robustly)

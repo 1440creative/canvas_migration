@@ -21,6 +21,7 @@ from importers.import_course import (
     load_id_map,
     save_id_map,
 )
+from logging_setup import setup_logging
 
 
 def _derive_course_seed(export_root: Path) -> Dict[str, str]:
@@ -133,6 +134,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("-v", "--verbose", action="count", default=0)
 
     args = ap.parse_args(argv)
+
+    setup_logging(verbosity=args.verbose or 1)
 
     export_root: Path = args.export_root
     steps = _parse_steps(args.steps)

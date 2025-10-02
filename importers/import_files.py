@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional, Protocol
 
@@ -141,6 +142,16 @@ def _upload_one(
         parent_folder_path=folder_path,
         on_duplicate=on_duplicate,
     )
+    try:
+        size_bytes = file_path.stat().st_size
+    except Exception:
+        size_bytes = -1
+    logger.debug(
+        "begin file upload: %s (size=%s bytes) -> %s",
+        file_path,
+        size_bytes,
+        folder_path or "/",
+    )
     upload_url = init["upload_url"]
     params = init.get("upload_params", {}) or {}
 
@@ -153,12 +164,19 @@ def _upload_one(
         except Exception:
             size_val = file_path.stat().st_size
 
+        start = time.time()
         with open(file_path, "rb") as fh:
             up = canvas._multipart_post(
                 str(upload_url),
                 data={"filename": fname, "content_type": ctype, "size": int(size_val)},
                 files={"file": (fname, fh, ctype)},
             )
+        logger.debug(
+            "upload complete: %s status=%s duration=%.2fs",
+            file_path,
+            up.status_code,
+            time.time() - start,
+        )
 
         if 300 <= up.status_code < 400 and "Location" in up.headers:
             finalize = canvas.session.get(up.headers["Location"], timeout=DEFAULT_TIMEOUT)
@@ -174,8 +192,15 @@ def _upload_one(
         return new_id
 
     # S3-style multipart
+    start = time.time()
     with open(file_path, "rb") as fh:
         up = canvas._multipart_post(str(upload_url), data=params, files={"file": (file_path.name, fh)})
+    logger.debug(
+        "upload complete: %s status=%s duration=%.2fs",
+        file_path,
+        up.status_code,
+        time.time() - start,
+    )
 
     if 300 <= up.status_code < 400 and "Location" in up.headers:
         finalize = canvas.session.get(up.headers["Location"], timeout=DEFAULT_TIMEOUT)

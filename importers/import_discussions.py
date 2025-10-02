@@ -68,11 +68,13 @@ def import_discussions(
 
     # Build absolute endpoint to match tests' requests_mock registrations
     api_root = (getattr(canvas, "api_root", "") or "").rstrip("/")
-    abs_endpoint = (
-        f"{api_root}/api/v1/courses/{target_course_id}/discussion_topics"
-        if api_root
-        else f"/api/v1/courses/{target_course_id}/discussion_topics"
-    )
+    if api_root:
+        if api_root.endswith("/api/v1"):
+            abs_endpoint = f"{api_root}/courses/{target_course_id}/discussion_topics"
+        else:
+            abs_endpoint = f"{api_root}/api/v1/courses/{target_course_id}/discussion_topics"
+    else:
+        abs_endpoint = f"/api/v1/courses/{target_course_id}/discussion_topics"
 
     for d in sorted(disc_root.iterdir()):
         if not d.is_dir():
@@ -129,7 +131,17 @@ def import_discussions(
                         new_id = None
 
             if not new_id:
-                log.error("failed-create (no id) title=%s", title)
+                detail = None
+                try:
+                    detail = r.text[:200]
+                except Exception:
+                    detail = None
+                log.error(
+                    "failed-create (no id) title=%s status=%s detail=%s",
+                    title,
+                    getattr(r, "status_code", "?"),
+                    detail,
+                )
                 failed += 1
                 continue
 
