@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional
-from urllib.parse import urljoin
 
 from logging_setup import get_logger
 
@@ -46,10 +45,14 @@ def _abs_url(api_root: str, endpoint_or_url: str) -> str:
     """
     if endpoint_or_url.startswith("http://") or endpoint_or_url.startswith("https://"):
         return endpoint_or_url
-    # ensure api_root ends with slash for urljoin to work intuitively
-    root = api_root if api_root.endswith("/") else api_root + "/"
-    ep = endpoint_or_url[1:] if endpoint_or_url.startswith("/") else endpoint_or_url
-    return urljoin(root, ep)
+    root = api_root.rstrip("/")
+    if not root.endswith("/api/v1"):
+        root = root + "/api/v1"
+    root += "/"
+    ep = endpoint_or_url.lstrip("/")
+    if ep.startswith("api/v1/"):
+        ep = ep[len("api/v1/") :]
+    return root + ep
 
 
 def _post_assignment(canvas, endpoint_path: str, payload: Dict[str, Any]) -> int:
@@ -63,12 +66,21 @@ def _post_assignment(canvas, endpoint_path: str, payload: Dict[str, Any]) -> int
     r = canvas.session.post(url, json=payload)
     # Do not raise here; tests often just check returned JSON/headers.
 
+    status = getattr(r, "status_code", None)
+    reason = getattr(r, "reason", "")
+
     # Try JSON body first
     body: Dict[str, Any] = {}
     try:
         body = r.json() or {}
     except Exception:
         body = {}
+
+    if status and status >= 400:
+        detail = body if isinstance(body, dict) else getattr(r, "text", "")
+        raise RuntimeError(
+            f"Canvas responded {status} {reason or ''} when creating assignment: {detail}"
+        )
 
     if isinstance(body.get("id"), int):
         return int(body["id"])
@@ -84,6 +96,11 @@ def _post_assignment(canvas, endpoint_path: str, payload: Dict[str, Any]) -> int
             fb = {}
         if isinstance(fb.get("id"), int):
             return int(fb["id"])
+        if isinstance(fb, dict) and fb.get("errors"):
+            raise RuntimeError(f"Follow-up assignment fetch returned errors: {fb['errors']}")
+
+    if isinstance(body, dict) and body.get("errors"):
+        raise RuntimeError(f"Canvas returned assignment errors: {body['errors']}")
 
     raise RuntimeError("Create assignment did not return an id")
 
@@ -170,6 +187,12 @@ def import_assignments(
             ):
                 if key in meta:
                     payload[key] = meta[key]
+
+            # Strip identifiers that are tied to the source course. Canvas will
+            # reject these because the new course does not share the same
+            # assignment groups or grading standards.
+            for stale_key in ("assignment_group_id", "grading_standard_id", "group_category_id"):
+                payload.pop(stale_key, None)
 
             # Try plain payload, then nested {"assignment": payload}
             try:

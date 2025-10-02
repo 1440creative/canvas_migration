@@ -62,3 +62,39 @@ def test_import_assignments_location_follow(tmp_path, requests_mock):
 
     assert counters["imported"] == 1
     assert id_map["assignments"][222] == 1234
+
+
+def test_assignment_payload_strips_unmapped_ids(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    a_dir = export_root / "assignments" / "wk3"
+    a_dir.mkdir(parents=True)
+
+    meta = {
+        "id": 333,
+        "name": "Group Project",
+        "assignment_group_id": 444,
+        "grading_standard_id": 555,
+        "group_category_id": 666,
+    }
+    (a_dir / "assignment_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+    (a_dir / "index.html").write_text("<p>Group work</p>", encoding="utf-8")
+
+    api_base = "https://api.example.edu"
+    create_url = f"{api_base}/api/v1/courses/444/assignments"
+
+    requests_mock.post(create_url, json={"id": 9999})
+
+    canvas = DummyCanvas(api_base)
+    id_map = {}
+
+    importer.import_assignments(
+        target_course_id=444,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+    )
+
+    payload = requests_mock.last_request.json()
+    assert "assignment_group_id" not in payload
+    assert "grading_standard_id" not in payload
+    assert "group_category_id" not in payload
