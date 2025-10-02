@@ -73,6 +73,63 @@ def _summarize_error(detail: Any) -> str:
 
     return str(detail)
 
+
+_QUESTION_DROP_KEYS = {
+    "id",
+    "quiz_id",
+    "assessment_question_id",
+    "position",
+    "quiz_group_id",
+    "matches",
+    "migration_id",
+    "quiz_version",
+    "question_bank_id",
+    "question_number",
+}
+
+_ANSWER_DROP_KEYS = {
+    "id",
+    "migration_id",
+    "position",
+    "assessment_question_id",
+    "quiz_id",
+}
+
+
+def _sanitize_question_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
+    cleaned: Dict[str, Any] = {}
+    for key, value in raw.items():
+        if key in _QUESTION_DROP_KEYS:
+            continue
+        cleaned[key] = value
+
+    answers = cleaned.get("answers")
+    if isinstance(answers, list):
+        new_answers = []
+        for ans in answers:
+            if not isinstance(ans, dict):
+                continue
+            ans_clean: Dict[str, Any] = {}
+            for key, value in ans.items():
+                if key in _ANSWER_DROP_KEYS:
+                    continue
+                ans_clean[key] = value
+            if "answer_text" not in ans_clean and "text" in ans_clean:
+                ans_clean["answer_text"] = ans_clean.pop("text")
+            new_answers.append(ans_clean)
+        cleaned["answers"] = new_answers
+
+    if cleaned.get("question_type") == "matching_question":
+        matches = raw.get("matches")
+        if isinstance(matches, list):
+            cleaned["matches"] = matches
+
+    for field in ["correct_comments", "incorrect_comments", "neutral_comments"]:
+        if cleaned.get(field) is None:
+            cleaned.pop(field, None)
+
+    return cleaned
+
 def _resp_json(resp: Any) -> dict:
     """
     Be tolerant of various test doubles:
@@ -232,13 +289,22 @@ def import_quizzes(
 
         old_id = _coerce_int(meta.get("id"))
 
+        existing_new_id = None
+        if old_id is not None:
+            existing_new_id = id_map.get("quizzes", {}).get(old_id)
+
         try:
-            log.debug("create quiz title=%r endpoint=%s", title, abs_create_base)
             start_time = time.time()
-            # Use absolute URL to satisfy requests_mock expectations
-            resp = canvas.session.post(abs_create_base, json={"quiz": quiz})
+            if existing_new_id:
+                endpoint = f"{abs_create_base}/{existing_new_id}"
+                log.debug("update quiz title=%r endpoint=%s", title, endpoint)
+                resp = canvas.session.put(endpoint, json={"quiz": quiz})
+            else:
+                log.debug("create quiz title=%r endpoint=%s", title, abs_create_base)
+                resp = canvas.session.post(abs_create_base, json={"quiz": quiz})
             log.debug(
-                "quiz POST complete title=%r status=%s duration=%.2fs",
+                "quiz %s complete title=%r status=%s duration=%.2fs",
+                "PUT" if existing_new_id else "POST",
                 title,
                 getattr(resp, "status_code", "?"),
                 time.time() - start_time,
@@ -263,6 +329,9 @@ def import_quizzes(
 
         body = _resp_json(resp)
         new_id = _coerce_int(body.get("id"))
+
+        if new_id is None and existing_new_id:
+            new_id = existing_new_id
 
         if new_id is None:
             loc = getattr(resp, "headers", {}).get("Location")
@@ -296,11 +365,43 @@ def import_quizzes(
                     log.warning("failed to read questions.json for %s: %s", title, e)
                     questions = []
 
+                if new_id and existing_new_id:
+                    try:
+                        list_url = f"{abs_create_base}/{new_id}/questions"
+                        existing_q = canvas.session.get(list_url, params={"per_page": 100}).json()
+                        if isinstance(existing_q, list):
+                            for eq in existing_q:
+                                eq_id = eq.get("id")
+                                if eq_id:
+                                    del_url = f"{abs_create_base}/{new_id}/questions/{eq_id}"
+                                    canvas.session.delete(del_url)
+                    except Exception as e:
+                        log.warning("failed to clear existing questions for quiz=%s: %s", title, e)
+
                 questions_url = f"{abs_create_base}/{new_id}/questions"
                 for q in questions:
+                    if not isinstance(q, dict):
+                        continue
+                    sanitized = _sanitize_question_payload(q)
                     try:
-                        canvas.session.post(questions_url, json={"question": q})
+                        q_start = time.time()
+                        resp_q = canvas.session.post(questions_url, json={"question": sanitized})
+                        status_q = getattr(resp_q, "status_code", 200)
+                        if status_q >= 400:
+                            log.warning(
+                                "failed to create question quiz=%s status=%s detail=%s",
+                                title,
+                                status_q,
+                                _summarize_error(resp_q),
+                            )
+                            continue
                         counters["questions"] += 1
+                        log.debug(
+                            "question POST complete quiz=%s status=%s duration=%.2fs",
+                            title,
+                            status_q,
+                            time.time() - q_start,
+                        )
                     except Exception as e:
                         log.warning("failed to create question for quiz=%s: %s", title, e)
 
