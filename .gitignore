@@ -78,6 +78,10 @@ docs/working_*.md
 docs/_gpt_chat/*
 docs/structure/*
 
+# Trivial or test logs
+docs/_reports
+
+
 # Scratch state
 id_map.json
 .env

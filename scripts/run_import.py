@@ -23,6 +23,55 @@ from importers.import_course import (
 )
 
 
+def _derive_course_seed(export_root: Path) -> Dict[str, str]:
+    seed: Dict[str, str] = {}
+    meta_path = export_root / "course" / "course_metadata.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if isinstance(meta, dict):
+                name = meta.get("name") or meta.get("course_code")
+                code = meta.get("course_code") or meta.get("course_code_display")
+                if isinstance(name, str) and name.strip():
+                    seed["name"] = name.strip()
+                if isinstance(code, str) and code.strip():
+                    seed["course_code"] = code.strip()
+        except Exception:
+            pass
+
+    fallback_name = seed.get("name") or export_root.name
+    seed.setdefault("name", fallback_name)
+    seed.setdefault("course_code", seed["name"])
+    return seed
+
+
+def _create_target_course(canvas, *, account_id: int, export_root: Path) -> int:
+    seed = _derive_course_seed(export_root)
+    payload = {"course": {"name": seed["name"], "course_code": seed["course_code"]}}
+    resp = canvas.post(f"/api/v1/accounts/{account_id}/courses", json=payload)
+
+    try:
+        body = resp.json()
+    except Exception:
+        body = {}
+
+    new_id: Optional[int] = None
+    if isinstance(body, dict):
+        candidate = body.get("id")
+        if candidate is None and isinstance(body.get("course"), dict):
+            candidate = body["course"].get("id")
+        if candidate is not None:
+            try:
+                new_id = int(candidate)
+            except (TypeError, ValueError):
+                new_id = None
+
+    if new_id is None:
+        raise RuntimeError("Canvas did not return a new course id")
+
+    return new_id
+
+
 def _parse_steps(s: Optional[str]) -> List[str]:
     if not s:
         return list(ALL_STEPS)
@@ -100,10 +149,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         _print_dry_run(export_root, steps)
         return 0
 
-    if args.target_course_id is None:
-        ap.error("--target-course-id is required unless --dry-run is specified")
+    if args.target_course_id is None and args.target_account_id is None:
+        ap.error("Provide --target-course-id or supply --target-account-id to create a new course.")
 
-    target_course_id: int = args.target_course_id
+    target_course_id: Optional[int] = args.target_course_id
 
     # Build a minimal API client for "programmatic import"
     base = os.getenv("CANVAS_TARGET_URL")
@@ -113,6 +162,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     canvas = CanvasAPI(base, token)
+
+    created_course_id: Optional[int] = None
+    if target_course_id is None:
+        try:
+            target_course_id = _create_target_course(
+                canvas,
+                account_id=int(args.target_account_id),
+                export_root=export_root,
+            )
+            created_course_id = target_course_id
+            print(f"Created new Canvas course {target_course_id} under account {args.target_account_id}")
+        except Exception as exc:
+            print(f"ERROR: failed to create course under account {args.target_account_id}: {exc}", file=sys.stderr)
+            return 3
+
+    assert target_course_id is not None
 
     # If resuming, load existing id_map; else start from scratch
     if args.resume and id_map_path.exists():
@@ -154,6 +219,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "counts": result.get("counts", {}),
             "errors": result.get("errors", []),
             "target_account_id": args.target_account_id,
+            "created_course_id": created_course_id,
             "id_map_keys": sorted(load_id_map(id_map_path).keys()) if id_map_path.exists() else [],
         }
         args.summary_json.parent.mkdir(parents=True, exist_ok=True)
