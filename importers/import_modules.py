@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
@@ -60,6 +61,40 @@ def _resp_json(resp: Any) -> dict:
             pass
 
     return {}
+
+
+def _collapse_ws(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _summarize_error(resp: Any) -> str:
+    body = _resp_json(resp)
+    if body:
+        errors = body.get("errors") if isinstance(body, dict) else None
+        if errors:
+            try:
+                return json.dumps(errors)
+            except Exception:
+                return str(errors)
+        try:
+            return json.dumps(body)
+        except Exception:
+            return str(body)
+    text = getattr(resp, "text", "")
+    if isinstance(text, str) and text:
+        snippet = text.strip()
+        if "<html" in snippet.lower():
+            title_match = re.search(r"<title[^>]*>\s*(.*?)\s*</title>", snippet, re.I | re.S)
+            h1_match = re.search(r"<h1[^>]*>\s*(.*?)\s*</h1>", snippet, re.I | re.S)
+            parts = []
+            if title_match:
+                parts.append(f"title={_collapse_ws(title_match.group(1))}")
+            if h1_match:
+                parts.append(f"h1={_collapse_ws(h1_match.group(1))}")
+            if parts:
+                return "; ".join(parts)
+        return _collapse_ws(snippet)[:200]
+    return str(resp)
 
 
 def _follow_location_for_id(canvas, loc_url: str) -> Optional[int]:
@@ -237,16 +272,34 @@ def import_modules(
 
         try:
             # Use ABSOLUTE URL so requests_mock matches test setup
-            create_url = f"{api_root}/api/v1/courses/{target_course_id}/modules" if api_root else f"/api/v1/courses/{target_course_id}/modules"
-            resp = canvas.session.post(create_url, json={"module": mod_payload})
+            if api_root:
+                base_modules = f"{api_root}/courses/{target_course_id}/modules" if api_root.endswith("/api/v1") else f"{api_root}/api/v1/courses/{target_course_id}/modules"
+            else:
+                base_modules = f"/api/v1/courses/{target_course_id}/modules"
+            resp = canvas.session.post(base_modules, json={"module": mod_payload})
         except Exception as e:
             log.error("failed to create module name=%r error=%s", name, e)
             counters["modules_failed"] += 1
             continue
 
+        status = getattr(resp, "status_code", None)
+        if status and status >= 400:
+            log.error(
+                "failed to create module name=%r status=%s detail=%s",
+                name,
+                status,
+                _summarize_error(resp),
+            )
+            counters["modules_failed"] += 1
+            continue
+
         new_mod_id = _extract_module_id(canvas, resp)
         if not isinstance(new_mod_id, int):
-            log.error("failed to create module (no id) name=%r", name)
+            log.error(
+                "failed to create module (no id) name=%r detail=%s",
+                name,
+                _summarize_error(resp),
+            )
             counters["modules_failed"] += 1
             continue
 
@@ -266,15 +319,35 @@ def import_modules(
                 continue
 
             try:
-                items_url = f"{api_root}/api/v1/courses/{target_course_id}/modules/{new_mod_id}/items" if api_root else f"/api/v1/courses/{target_course_id}/modules/{new_mod_id}/items"
-                r_item = canvas.session.post(items_url, json=payload)
-                body = _resp_json(r_item)
-                if isinstance(body.get("id"), int):
-                    counters["items_created"] += 1
+                if api_root:
+                    items_url = f"{api_root}/courses/{target_course_id}/modules/{new_mod_id}/items" if api_root.endswith("/api/v1") else f"{api_root}/api/v1/courses/{target_course_id}/modules/{new_mod_id}/items"
                 else:
+                    items_url = f"/api/v1/courses/{target_course_id}/modules/{new_mod_id}/items"
+                r_item = canvas.session.post(items_url, json=payload)
+                status_item = getattr(r_item, "status_code", None)
+                if status_item and status_item >= 400:
                     counters["items_failed"] += 1
-            except Exception:
+                    log.error(
+                        "failed to add module item type=%s title=%r status=%s detail=%s",
+                        (payload or {}).get("module_item", {}).get("type"),
+                        (payload or {}).get("module_item", {}).get("title"),
+                        status_item,
+                        _summarize_error(r_item),
+                    )
+                else:
+                    body = _resp_json(r_item)
+                    if isinstance(body.get("id"), int):
+                        counters["items_created"] += 1
+                    else:
+                        counters["items_failed"] += 1
+            except Exception as e:
                 counters["items_failed"] += 1
+                log.error(
+                    "failed to add module item type=%s title=%r error=%s",
+                    (payload or {}).get("module_item", {}).get("type"),
+                    (payload or {}).get("module_item", {}).get("title"),
+                    e,
+                )
             finally:
                 position += 1
 

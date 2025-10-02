@@ -48,9 +48,20 @@ def load_id_map(path: Path) -> Dict[str, Dict[Any, Any]]:
     return {}
 
 
+def _stringify_id_map(id_map: Dict[str, Dict[Any, Any]]) -> Dict[str, Any]:
+    sanitized: Dict[str, Any] = {}
+    for bucket, mapping in (id_map or {}).items():
+        if isinstance(mapping, dict):
+            sanitized[bucket] = {str(key): value for key, value in mapping.items()}
+        else:
+            sanitized[bucket] = mapping
+    return sanitized
+
+
 def save_id_map(path: Path, id_map: Dict[str, Dict[Any, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(id_map, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    sanitized = _stringify_id_map(id_map)
+    path.write_text(json.dumps(sanitized, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def scan_export(export_root: Path) -> Dict[str, int]:
