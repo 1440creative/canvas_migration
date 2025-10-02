@@ -278,26 +278,32 @@ def import_course_settings(
             default_view = hmeta.get("default_view")
             front_url = hmeta.get("front_page_url")
 
-            if default_view:
-                url = _full_url(base, f"/v1/courses/{target_course_id}")
-                lg.debug("PUT course default_view=%s", default_view)
-                try:
-                    requests.put(url, json={"course": {"default_view": default_view}})
-                    counts["updated"] += 1
-                except Exception as e:
-                    lg.warning("Failed to set default_view=%s: %s", default_view, e)
-
+            new_slug = None
             if front_url:
                 page_slug_map = (id_map or {}).get("pages_url") if isinstance(id_map, dict) else {}
                 new_slug = page_slug_map.get(front_url) or front_url
                 url = _full_url(base, f"/v1/courses/{target_course_id}/pages/{new_slug}")
                 lg.debug("PUT wiki_page front_page=true url=%s (old=%s)", new_slug, front_url)
                 try:
-                    requests.put(url, json={"wiki_page": {"front_page": True}})
+                    resp = requests.put(url, json={"wiki_page": {"front_page": True}})
+                    resp.raise_for_status()
                     lg.info("Set front page: %s", new_slug)
                     counts["updated"] += 1
                 except Exception as e:
                     lg.warning("Failed to set front page %s (slug=%s): %s", front_url, new_slug, e)
+
+            if default_view:
+                payload = {"default_view": default_view}
+                if default_view == "wiki" and new_slug:
+                    payload["home_page_url"] = new_slug
+                url = _full_url(base, f"/v1/courses/{target_course_id}")
+                lg.debug("PUT course default_view=%s home_page_url=%s", default_view, payload.get("home_page_url"))
+                try:
+                    resp = requests.put(url, json={"course": payload})
+                    resp.raise_for_status()
+                    counts["updated"] += 1
+                except Exception as e:
+                    lg.warning("Failed to set default_view=%s: %s", default_view, e)
         except Exception as e:
             lg.warning("Failed to import home.json: %s", e)
 
