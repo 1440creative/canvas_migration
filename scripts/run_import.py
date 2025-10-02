@@ -51,7 +51,7 @@ def _print_dry_run(export_root: Path, steps: List[str]) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Run Canvas import pipeline.")
     ap.add_argument("--export-root", required=True, type=Path, help="Path to export/data/<SOURCE_ID>")
-    ap.add_argument("--target-course-id", required=True, type=int, help="Target Canvas course ID")
+    ap.add_argument("--target-course-id", type=int, help="Target Canvas course ID (required unless --dry-run)")
     ap.add_argument("--steps", default=None, help=f"Comma-separated steps subset. Known: {','.join(ALL_STEPS)}")
     ap.add_argument("--resume", action="store_true",
                     help="Resume using existing id_map.json in export-root (if present).")
@@ -86,7 +86,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     export_root: Path = args.export_root
-    target_course_id: int = args.target_course_id
     steps = _parse_steps(args.steps)
     id_map_path = args.id_map or (export_root / "id_map.json")
 
@@ -100,6 +99,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.dry_run:
         _print_dry_run(export_root, steps)
         return 0
+
+    if args.target_course_id is None:
+        ap.error("--target-course-id is required unless --dry-run is specified")
+
+    target_course_id: int = args.target_course_id
 
     # Build a minimal API client for "programmatic import"
     base = os.getenv("CANVAS_TARGET_URL")
