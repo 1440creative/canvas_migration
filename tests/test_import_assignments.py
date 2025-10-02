@@ -98,3 +98,32 @@ def test_assignment_payload_strips_unmapped_ids(tmp_path, requests_mock):
     assert "assignment_group_id" not in payload
     assert "grading_standard_id" not in payload
     assert "group_category_id" not in payload
+
+
+def test_assignment_online_quiz_skips(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    a_dir = export_root / "assignments" / "quiz-backed"
+    a_dir.mkdir(parents=True)
+
+    meta = {
+        "id": 777,
+        "name": "Module Quiz",
+        "submission_types": ["online_quiz"],
+    }
+    (a_dir / "assignment_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    api_base = "https://api.example.edu"
+    requests_mock.post(f"{api_base}/api/v1/courses/123/assignments", json={"id": 1})
+
+    canvas = DummyCanvas(api_base)
+    id_map = {}
+
+    counters = importer.import_assignments(
+        target_course_id=123,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+    )
+
+    assert counters["skipped"] == 1
+    assert len(requests_mock.request_history) == 0

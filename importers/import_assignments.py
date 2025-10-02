@@ -63,7 +63,8 @@ def _post_assignment(canvas, endpoint_path: str, payload: Dict[str, Any]) -> int
     Uses canvas.session directly for compatibility with test DummyCanvas.
     """
     url = _abs_url(canvas.api_root, endpoint_path)
-    r = canvas.session.post(url, json=payload)
+    body_wrapper = {"assignment": payload}
+    r = canvas.session.post(url, json=body_wrapper)
     # Do not raise here; tests often just check returned JSON/headers.
 
     status = getattr(r, "status_code", None)
@@ -194,11 +195,16 @@ def import_assignments(
             for stale_key in ("assignment_group_id", "grading_standard_id", "group_category_id"):
                 payload.pop(stale_key, None)
 
-            # Try plain payload, then nested {"assignment": payload}
-            try:
-                new_id = _post_assignment(canvas, endpoint_path, payload)
-            except Exception:
-                new_id = _post_assignment(canvas, endpoint_path, {"assignment": payload})
+            submission_types = list(meta.get("submission_types") or [])
+            if any(st == "online_quiz" for st in submission_types):
+                log.info(
+                    "Skipping assignment backed by quiz",
+                    extra={"id": old_id, "name": name},
+                )
+                counters["skipped"] += 1
+                continue
+
+            new_id = _post_assignment(canvas, endpoint_path, payload)
 
             if isinstance(old_id, int):
                 id_map["assignments"][int(old_id)] = int(new_id)
