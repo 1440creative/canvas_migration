@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol, Tuple
 
@@ -232,8 +233,16 @@ def import_quizzes(
         old_id = _coerce_int(meta.get("id"))
 
         try:
+            log.debug("create quiz title=%r endpoint=%s", title, abs_create_base)
+            start_time = time.time()
             # Use absolute URL to satisfy requests_mock expectations
             resp = canvas.session.post(abs_create_base, json={"quiz": quiz})
+            log.debug(
+                "quiz POST complete title=%r status=%s duration=%.2fs",
+                title,
+                getattr(resp, "status_code", "?"),
+                time.time() - start_time,
+            )
         except Exception as e:
             counters["failed"] += 1
             log.exception("failed-create title=%s: %s", title, e)
