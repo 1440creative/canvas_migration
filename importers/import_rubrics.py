@@ -24,6 +24,9 @@ def _find_rubrics_json(export_root: Path) -> Optional[Path]:
     p2 = Path(export_root) / "course" / "rubrics" / "rubrics.json"
     if p2.exists():
         return p2
+    parent_rubrics = Path(export_root).parent / "rubrics" / "rubrics.json"
+    if parent_rubrics.exists():
+        return parent_rubrics
     return None
 
 def import_rubrics(
@@ -47,6 +50,8 @@ def import_rubrics(
         log.info("No rubrics to import (missing %s)", (Path(export_root) / "rubrics" / "rubrics.json"))
         return {"imported": 0, "skipped": 0, "failed": 0, "total": 0}
 
+    log.debug("Loading rubrics from %s", src_path)
+
     data = _read_json(src_path) or []
     if not isinstance(data, list):
         data = []
@@ -65,6 +70,14 @@ def import_rubrics(
                 "criteria": criteria,
             }
         }
+        if r.get("points_possible") is not None:
+            payload["rubric"]["points_possible"] = r["points_possible"]
+        if r.get("free_form_criterion_comments") is not None:
+            payload["rubric"]["free_form_criterion_comments"] = bool(r.get("free_form_criterion_comments"))
+        if r.get("hide_score_total") is not None:
+            payload["rubric"]["hide_score_total"] = bool(r.get("hide_score_total"))
+        if r.get("description"):
+            payload["rubric"]["description"] = r["description"]
 
         try:
             resp = canvas.post(f"/api/v1/courses/{target_course_id}/rubrics", json=payload)
@@ -76,8 +89,9 @@ def import_rubrics(
                     new_id = new.get("rubric_id") or new.get("data", {}).get("id")
 
             if not new_id:
+                detail = new if new else getattr(resp, "text", "")
                 failed += 1
-                log.error("failed to create rubric (no id) title=%r", title)
+                log.error("failed to create rubric (no id) title=%r detail=%s", title, detail)
                 continue
 
             # map old rubric id if present
