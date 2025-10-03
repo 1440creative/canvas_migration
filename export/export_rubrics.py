@@ -202,6 +202,13 @@ def export_rubrics(course_id: int, export_root: Path, canvas: CanvasLike) -> Lis
     # Slim them down
     slim: List[Dict[str, Any]] = [_slim_rubric(r) for r in rubrics]
 
+    for entry in slim:
+        entry.setdefault("course_id", course_id)
+        associations = entry.get("associations") or []
+        for assoc in associations:
+            if isinstance(assoc, dict):
+                assoc.setdefault("course_id", course_id)
+
     # Preserve existing per-rubric layout (under course/<id>/rubrics)
     course_dir = _course_dir(export_root, course_id)
     course_dir.mkdir(parents=True, exist_ok=True)

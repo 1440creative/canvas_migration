@@ -102,6 +102,12 @@ def test_import_rubrics_creates_and_associates(tmp_path, requests_mock):
     # id_map with assignment mapping (source 2001 -> target 9001)
     id_map = {"assignments": {2001: 9001}}
 
+    # Existing rubrics list is empty so importer creates one
+    requests_mock.get(
+        f"{base_host}/api/v1/courses/{target_course_id}/rubrics",
+        json=[],
+    )
+
     # Mock rubric creation -> returns new rubric id
     def _match_create_rubric(request):
         body = request.json()
@@ -137,9 +143,73 @@ def test_import_rubrics_creates_and_associates(tmp_path, requests_mock):
 
     api = CanvasAPI(base_host, "tkn")
     from importers.import_rubrics import import_rubrics as do_import
-    do_import(target_course_id=target_course_id, export_root=tmp_path, canvas=api, id_map=id_map)
+    result = do_import(target_course_id=target_course_id, export_root=tmp_path, canvas=api, id_map=id_map)
 
     # id_map updated with rubric mapping
     assert id_map.get("rubrics", {}).get(55) == 7001
     # 1 association created and matched new assignment id
     assert len(created_assocs) == 1
+    assert result == {"imported": 1, "skipped": 0, "failed": 0, "total": 1}
+
+
+def test_import_rubrics_reuses_existing_rubric(tmp_path, requests_mock):
+    target_course_id = 9876
+    base_host = "https://canvas.test"
+
+    # Exported rubric (with source id)
+    rubrics_dir = tmp_path / "rubrics"
+    rubrics_dir.mkdir(parents=True, exist_ok=True)
+    exported = [{
+        "id": 77,
+        "title": "Shared Rubric",
+        "criteria": [
+            {"description": "Quality", "points": 10, "ratings": []},
+        ],
+        "associations": [
+            {"association_type": "Assignment", "association_id": 1234, "use_for_grading": True},
+        ],
+    }]
+    (rubrics_dir / "rubrics.json").write_text(json.dumps(exported), encoding="utf-8")
+
+    # assignment mapping already populated
+    id_map = {"assignments": {1234: 8888}, "rubrics": {}}
+
+    # Target already has rubric with same title; importer should reuse it
+    requests_mock.get(
+        f"{base_host}/api/v1/courses/{target_course_id}/rubrics",
+        json=[{"id": 4444, "title": "Shared Rubric"}],
+    )
+
+    create_rubric = requests_mock.post(
+        f"{base_host}/api/v1/courses/{target_course_id}/rubrics",
+        json={"id": 9999},
+        status_code=201,
+    )
+
+    # Association POST should still occur using existing rubric id
+    captured_assocs = []
+
+    def _match_assoc(request):
+        payload = request.json()["rubric_association"]
+        captured_assocs.append(payload)
+        assert payload["rubric_id"] == 4444
+        assert payload["association_id"] == 8888
+        return True
+
+    requests_mock.post(
+        f"{base_host}/api/v1/courses/{target_course_id}/rubric_associations",
+        additional_matcher=_match_assoc,
+        json={"id": 22},
+        status_code=201,
+    )
+
+    api = CanvasAPI(base_host, "tkn")
+    from importers.import_rubrics import import_rubrics as do_import
+
+    result = do_import(target_course_id=target_course_id, export_root=tmp_path, canvas=api, id_map=id_map)
+
+    # Should not create a duplicate rubric
+    assert create_rubric.call_count == 0
+    assert id_map["rubrics"][77] == 4444
+    assert len(captured_assocs) == 1
+    assert result == {"imported": 0, "skipped": 1, "failed": 0, "total": 1}

@@ -174,8 +174,12 @@ def import_course(
                 save_id_map(id_map_path, id_map)
                 
             elif step == "rubrics":
-                
-                import_rubrics(target_course_id=target_course_id, export_root=export_root, canvas=canvas)
+                import_rubrics(
+                    target_course_id=target_course_id,
+                    export_root=export_root,
+                    canvas=canvas,
+                    id_map=id_map,
+                )
                 save_id_map(id_map_path, id_map)
             
             elif step == "rubric_links":
