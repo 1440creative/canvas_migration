@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from utils.api import CanvasAPI
 from export.export_rubrics import export_rubrics
@@ -110,9 +111,9 @@ def test_import_rubrics_creates_and_associates(tmp_path, requests_mock):
 
     # Mock rubric creation -> returns new rubric id
     def _match_create_rubric(request):
-        body = request.json()
-        assert body["rubric"]["title"] == "Project Rubric"
-        assert body["rubric"]["criteria"][0]["description"] == "Clarity"
+        data = {k: v[0] for k, v in parse_qs(request.text).items()}
+        assert data["rubric[title]"] == "Project Rubric"
+        assert data["rubric[criteria][0][description]"] == "Clarity"
         return True
 
     requests_mock.post(

@@ -44,6 +44,61 @@ def _title_key(value: Any) -> Optional[str]:
             return key.casefold()
     return None
 
+
+def _bool_flag(value: Any) -> str:
+    return "1" if bool(value) else "0"
+
+
+def _build_rubric_form_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten rubric dict for Canvas form encoding."""
+    payload: Dict[str, Any] = {}
+
+    title = raw.get("title") or "Untitled Rubric"
+    payload["rubric[title]"] = title
+
+    if raw.get("points_possible") is not None:
+        payload["rubric[points_possible]"] = str(raw["points_possible"])
+
+    if raw.get("free_form_criterion_comments") is not None:
+        payload["rubric[free_form_criterion_comments]"] = _bool_flag(raw.get("free_form_criterion_comments"))
+
+    if raw.get("hide_score_total") is not None:
+        payload["rubric[hide_score_total]"] = _bool_flag(raw.get("hide_score_total"))
+
+    if raw.get("description"):
+        payload["rubric[description]"] = raw["description"]
+
+    criteria = raw.get("criteria") or []
+    for idx, criterion in enumerate(criteria):
+        if not isinstance(criterion, dict):
+            continue
+        prefix = f"rubric[criteria][{idx}]"
+        payload[f"{prefix}[id]"] = f"new_{idx}"
+        payload[f"{prefix}[description]"] = criterion.get("description") or ""
+        if criterion.get("long_description"):
+            payload[f"{prefix}[long_description]"] = criterion["long_description"]
+        if criterion.get("points") is not None:
+            payload[f"{prefix}[points]"] = str(criterion.get("points"))
+        payload[f"{prefix}[ignore_for_scoring]"] = _bool_flag(criterion.get("ignore_for_scoring", False))
+
+        ratings = criterion.get("ratings") or []
+        if not isinstance(ratings, list) or not ratings:
+            ratings = [{"description": "Full Marks", "points": criterion.get("points") or 0}]
+
+        for ridx, rating in enumerate(ratings):
+            if not isinstance(rating, dict):
+                continue
+            rprefix = f"{prefix}[ratings][{ridx}]"
+            payload[f"{rprefix}[id]"] = f"new_{idx}_{ridx}"
+            payload[f"{rprefix}[description]"] = rating.get("description") or ""
+            if rating.get("long_description"):
+                payload[f"{rprefix}[long_description]"] = rating["long_description"]
+            if rating.get("points") is not None:
+                payload[f"{rprefix}[points]"] = str(rating.get("points"))
+
+    return payload
+
+
 def import_rubrics(
     *,
     target_course_id: int,
@@ -108,20 +163,7 @@ def import_rubrics(
 
         title = raw.get("title") or "Untitled Rubric"
         criteria = raw.get("criteria") or []
-        payload = {
-            "rubric": {
-                "title": title,
-                "criteria": criteria,
-            }
-        }
-        if raw.get("points_possible") is not None:
-            payload["rubric"]["points_possible"] = raw["points_possible"]
-        if raw.get("free_form_criterion_comments") is not None:
-            payload["rubric"]["free_form_criterion_comments"] = bool(raw.get("free_form_criterion_comments"))
-        if raw.get("hide_score_total") is not None:
-            payload["rubric"]["hide_score_total"] = bool(raw.get("hide_score_total"))
-        if raw.get("description"):
-            payload["rubric"]["description"] = raw["description"]
+        payload = _build_rubric_form_payload({**raw, "title": title, "criteria": criteria})
 
         old_rubric_id = _as_int(raw.get("id"))
         mapped_rubric_id: Optional[int] = None
@@ -141,11 +183,23 @@ def import_rubrics(
             resp = None
             payload_json: Dict[str, Any] | None = None
             try:
-                resp = canvas.post(f"/api/v1/courses/{target_course_id}/rubrics", json=payload)
+                resp = canvas.post(
+                    f"/api/v1/courses/{target_course_id}/rubrics",
+                    data=payload,
+                )
                 payload_json = resp.json() if hasattr(resp, "json") else {}
             except Exception as exc:
                 failed += 1
-                log.error("failed to create rubric title=%r error=%s", title, exc)
+                detail = ""
+                response = getattr(exc, "response", None)
+                if response is not None and getattr(response, "text", ""):
+                    detail = response.text[:500]
+                log.error(
+                    "failed to create rubric title=%r error=%s detail=%s",
+                    title,
+                    exc,
+                    detail,
+                )
                 continue
 
             if isinstance(payload_json, dict):
