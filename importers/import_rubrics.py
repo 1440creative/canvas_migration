@@ -204,6 +204,8 @@ def import_rubrics(
 
             if isinstance(payload_json, dict):
                 candidate = payload_json.get("id") or payload_json.get("rubric_id")
+                if candidate is None and isinstance(payload_json.get("rubric"), dict):
+                    candidate = payload_json["rubric"].get("id") or payload_json["rubric"].get("rubric_id")
                 if candidate is None and isinstance(payload_json.get("data"), dict):
                     candidate = payload_json["data"].get("id")
                 new_rubric_id = _as_int(candidate)
