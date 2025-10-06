@@ -8,6 +8,7 @@ from utils.api import CanvasAPI, source_api
 from export.export_pages import export_pages
 from export.export_modules import export_modules
 from export.export_assignments import export_assignments
+from export.export_assignment_groups import export_assignment_groups
 from export.export_quizzes import export_quizzes
 from export.export_discussions import export_discussions
 from export.export_files import export_files
@@ -27,6 +28,7 @@ def export_course(course_id: int, export_root: Path, api: Optional[CanvasAPI] = 
     export_pages(course_id, export_root, api)
     export_modules(course_id, export_root, api)
     export_assignments(course_id, export_root, api)
+    export_assignment_groups(course_id, export_root, api)
     export_quizzes(course_id, export_root, api)
     export_discussions(course_id, export_root, api)
     export_files(course_id, export_root, api)

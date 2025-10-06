@@ -23,6 +23,7 @@ from utils.api import source_api
 from export.export_pages import export_pages
 from export.export_modules import export_modules
 from export.export_assignments import export_assignments
+from export.export_assignment_groups import export_assignment_groups
 from export.export_quizzes import export_quizzes
 from export.export_discussions import export_discussions
 from export.export_announcements import export_announcements
@@ -38,6 +39,7 @@ from export.export_syllabus import export_syllabus
 ALL_STEPS = [
     "pages",
     "assignments",
+    "assignment_groups",
     "quizzes",
     "files",
     "discussions",
@@ -83,6 +85,9 @@ def main() -> int:
             elif name == "assignments":
                 metas = export_assignments(cid, root, source_api)
                 counts[name] = len(metas)
+            elif name == "assignment_groups":
+                metas = export_assignment_groups(cid, root, source_api)
+                counts[name] = len(metas)
             elif name == "quizzes":
                 metas = export_quizzes(cid, root, source_api, include_questions=args.include_questions)
                 counts[name] = len(metas)
@@ -114,6 +119,7 @@ def main() -> int:
                 export_syllabus(cid, root, source_api)
                 export_rubrics(cid, root, source_api)
                 export_rubric_links(cid, root, source_api)
+                export_assignment_groups(cid, root, source_api)
                 counts[name] = 1
             else:
                 raise ValueError(f"unknown step: {name}")

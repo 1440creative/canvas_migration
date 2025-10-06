@@ -28,6 +28,7 @@ def test_cli_dry_run_plan():
     # Expect the DRY-RUN plan and counts for each step
     assert "DRY-RUN: plan for steps" in out
     assert " - pages" in out and "1 item(s)" in out
+    assert " - assignment_groups" in out and "1 item(s)" in out
     assert " - assignments" in out and "1 item(s)" in out
     assert " - quizzes" in out and "1 item(s)" in out
     assert " - files" in out and "1 item(s)" in out

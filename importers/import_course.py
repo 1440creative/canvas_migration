@@ -10,7 +10,19 @@ import requests
 from logging_setup import get_logger
 
 # Import steps supported by the importer 
-ALL_STEPS = ["pages", "assignments", "quizzes", "files", "discussions", "announcements", "modules", "rubrics", "rubric_links", "course"]
+ALL_STEPS = [
+    "pages",
+    "assignment_groups",
+    "assignments",
+    "quizzes",
+    "files",
+    "discussions",
+    "announcements",
+    "modules",
+    "rubrics",
+    "rubric_links",
+    "course",
+]
 
 
 class CanvasLike(Protocol):
@@ -70,6 +82,9 @@ def scan_export(export_root: Path) -> Dict[str, int]:
     """
     counts: Dict[str, int] = {k: 0 for k in ALL_STEPS}
     counts["pages"] = len(list((export_root / "pages").rglob("page_metadata.json")))
+    counts["assignment_groups"] = len(
+        list((export_root / "assignment_groups").rglob("assignment_group_metadata.json"))
+    )
     counts["assignments"] = len(list((export_root / "assignments").rglob("assignment_metadata.json")))
     counts["quizzes"] = len(list((export_root / "quizzes").rglob("quiz_metadata.json")))
     counts["files"] = len(list((export_root / "files").rglob("*.metadata.json")))
@@ -124,6 +139,7 @@ def import_course(
     # Lazy-import concrete importers to avoid circulars
     from importers.import_pages import import_pages
     from importers.import_assignments import import_assignments
+    from importers.import_assignment_groups import import_assignment_groups
     from importers.import_quizzes import import_quizzes
     from importers.import_files import import_files
     from importers.import_discussions import import_discussions
@@ -146,6 +162,15 @@ def import_course(
         try:
             if step == "pages":
                 import_pages(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
+                save_id_map(id_map_path, id_map)
+
+            elif step == "assignment_groups":
+                import_assignment_groups(
+                    target_course_id=target_course_id,
+                    export_root=export_root,
+                    canvas=canvas,
+                    id_map=id_map,
+                )
                 save_id_map(id_map_path, id_map)
 
             elif step == "assignments":

@@ -94,11 +94,40 @@ def test_assignment_payload_strips_unmapped_ids(tmp_path, requests_mock):
         id_map=id_map,
     )
 
-    payload = requests_mock.last_request.json()
+    payload = requests_mock.last_request.json()["assignment"]
     assert "assignment_group_id" not in payload
     assert "grading_standard_id" not in payload
     assert "group_category_id" not in payload
 
+
+def test_assignment_group_id_remaps_when_available(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    a_dir = export_root / "assignments" / "wk4"
+    a_dir.mkdir(parents=True)
+
+    meta = {
+        "id": 444,
+        "name": "Essay",
+        "assignment_group_id": 11,
+    }
+    (a_dir / "assignment_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    api_base = "https://api.example.edu"
+    create_url = f"{api_base}/api/v1/courses/555/assignments"
+    requests_mock.post(create_url, json={"id": 7777})
+
+    canvas = DummyCanvas(api_base)
+    id_map = {"assignment_groups": {11: 99}}
+
+    importer.import_assignments(
+        target_course_id=555,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+    )
+
+    payload = requests_mock.last_request.json()["assignment"]
+    assert payload["assignment_group_id"] == 99
 
 def test_assignment_online_quiz_skips(tmp_path, requests_mock):
     export_root = tmp_path / "export" / "data" / "101"

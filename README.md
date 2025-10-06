@@ -59,13 +59,14 @@ id_map keys present: none
 **Order:**
 
 1. pages
-2. assignments
-3. quizzes (optionally questions)
-4. files
-5. discussions
-6. announcements
-7. modules
-8. course settings (optionally blueprint sync)
+2. assignment groups
+3. assignments
+4. quizzes (optionally questions)
+5. files
+6. discussions
+7. announcements
+8. modules
+9. course settings (optionally blueprint sync)
 
 ---
 

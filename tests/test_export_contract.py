@@ -294,6 +294,7 @@ def test_export_contract_end_to_end(tmp_path: Path):
     # If some exporters require API, you can pass a dummy/mocked client.
     mod_pages        = _maybe_import("export.export_pages")
     mod_assignments  = _maybe_import("export.export_assignments")
+    mod_assignment_groups = _maybe_import("export.export_assignment_groups")
     mod_quizzes      = _maybe_import("export.export_quizzes")
     mod_discussions  = _maybe_import("export.export_discussions")
     mod_files        = _maybe_import("export.export_files")
@@ -322,6 +323,8 @@ def test_export_contract_end_to_end(tmp_path: Path):
         _require(mod_files, "export_files")(SRC_ID, export_root, api)
     if mod_modules:
         _require(mod_modules, "export_modules")(SRC_ID, export_root, api)
+    if mod_assignment_groups:
+        _require(mod_assignment_groups, "export_assignment_groups")(SRC_ID, export_root, api)
     if mod_course:
         _require(mod_course, "export_course")(SRC_ID, export_root, api)
 
@@ -334,6 +337,11 @@ def test_export_contract_end_to_end(tmp_path: Path):
     assert _first("assignments/**/assignment_metadata.json", course_root), "assignment_metadata.json missing"
     # description.html is optional, but preferred
     # _first("assignments/**/description.html", out_root)
+
+    # Assignment groups
+    assert _first(
+        "assignment_groups/**/assignment_group_metadata.json", course_root
+    ), "assignment_group_metadata.json missing"
 
     # Quizzes
     assert _first("quizzes/**/quiz_metadata.json", course_root), "quiz_metadata.json missing"
@@ -367,6 +375,13 @@ def test_export_contract_end_to_end(tmp_path: Path):
     ameta = json.loads(_first("assignments/**/assignment_metadata.json", course_root).read_text(encoding="utf-8"))
     for k in ["id", "name", "published"]:
         assert k in ameta, f"assignment meta missing key: {k}"
+
+    # Assignment group metadata keys
+    gmeta = json.loads(
+        _first("assignment_groups/**/assignment_group_metadata.json", course_root).read_text(encoding="utf-8")
+    )
+    for k in ["id", "name", "assignment_ids"]:
+        assert k in gmeta, f"assignment group meta missing key: {k}"
 
     # Quiz metadata keys
     qmeta = json.loads(_first("quizzes/**/quiz_metadata.json", course_root).read_text(encoding="utf-8"))

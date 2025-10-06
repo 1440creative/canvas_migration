@@ -228,10 +228,40 @@ def import_assignments(
                 if key in meta:
                     payload[key] = meta[key]
 
+            # Remap assignment_group_id when the importer has already created groups.
+            if "assignment_group_id" in payload:
+                group_mapping = id_map.get("assignment_groups") if isinstance(id_map, dict) else None
+                mapped_id = None
+                if isinstance(group_mapping, dict):
+                    raw_old_id = meta.get("assignment_group_id")
+                    lookup_keys = []
+                    if raw_old_id is not None:
+                        lookup_keys.append(raw_old_id)
+                        try:
+                            lookup_keys.append(int(raw_old_id))
+                        except (TypeError, ValueError):
+                            pass
+                    for key in lookup_keys:
+                        if key in group_mapping:
+                            mapped_id = group_mapping[key]
+                            break
+                    if mapped_id is None:
+                        for key in lookup_keys:
+                            mapped_id = group_mapping.get(str(key))
+                            if mapped_id is not None:
+                                break
+                if mapped_id is not None:
+                    try:
+                        payload["assignment_group_id"] = int(mapped_id)
+                    except (TypeError, ValueError):
+                        payload.pop("assignment_group_id", None)
+                else:
+                    payload.pop("assignment_group_id", None)
+
             # Strip identifiers that are tied to the source course. Canvas will
             # reject these because the new course does not share the same
-            # assignment groups or grading standards.
-            for stale_key in ("assignment_group_id", "grading_standard_id", "group_category_id"):
+            # grading standards or group categories.
+            for stale_key in ("grading_standard_id", "group_category_id"):
                 payload.pop(stale_key, None)
 
             submission_types = list(meta.get("submission_types") or [])

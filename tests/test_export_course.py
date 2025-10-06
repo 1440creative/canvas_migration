@@ -6,6 +6,7 @@ from export.export_course import export_course
 
 @patch("export.export_course.export_pages")
 @patch("export.export_course.export_modules")
+@patch("export.export_course.export_assignment_groups")
 @patch("export.export_course.export_assignments")
 @patch("export.export_course.export_quizzes")
 @patch("export.export_course.export_discussions")
@@ -19,6 +20,7 @@ def test_export_course_calls_all_exports(
     mock_discussions,
     mock_quizzes,
     mock_assignments,
+    mock_assignment_groups,
     mock_modules,
     mock_pages,
     tmp_path,
@@ -33,9 +35,9 @@ def test_export_course_calls_all_exports(
     mock_pages.assert_called_once_with(course_id, tmp_path, api_sentinel)
     mock_modules.assert_called_once_with(course_id, tmp_path, api_sentinel)
     mock_assignments.assert_called_once_with(course_id, tmp_path, api_sentinel)
+    mock_assignment_groups.assert_called_once_with(course_id, tmp_path, api_sentinel)
     mock_quizzes.assert_called_once_with(course_id, tmp_path, api_sentinel)
     mock_discussions.assert_called_once_with(course_id, tmp_path, api_sentinel)
     mock_files.assert_called_once_with(course_id, tmp_path, api_sentinel)
     mock_settings.assert_called_once_with(course_id, tmp_path, api_sentinel)
     mock_blueprint.assert_called_once_with(course_id, tmp_path, api_sentinel)
-

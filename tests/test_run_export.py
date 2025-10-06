@@ -20,6 +20,7 @@ def test_run_export_runs_steps(monkeypatch, tmp_path: Path):
     # monkeypatch each export_* to fake
     monkeypatch.setattr(runner, "export_pages", lambda cid, root, api: [{"id": 1}])
     monkeypatch.setattr(runner, "export_assignments", lambda cid, root, api: [{"id": 2}])
+    monkeypatch.setattr(runner, "export_assignment_groups", lambda cid, root, api: [{"id": 20}])
     monkeypatch.setattr(runner, "export_quizzes", lambda cid, root, api, **kw: [{"id": 3}])
     monkeypatch.setattr(runner, "export_files", lambda cid, root, api: [{"id": 4}])
     monkeypatch.setattr(runner, "export_discussions", lambda cid, root, api: [{"id": 5}])
