@@ -52,9 +52,9 @@ def _normalize_int_map(raw: Optional[Dict[Any, Any]]) -> Dict[int, int]:
     return normalized
 
 
-def _fetch_json(base: str, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def _fetch_json(session: requests.Session, base: str, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     url = _full_url(base, endpoint)
-    resp = requests.get(url, params=params)
+    resp = session.get(url, params=params)
     resp.raise_for_status()
     data = resp.json()
     if isinstance(data, dict):
@@ -62,7 +62,7 @@ def _fetch_json(base: str, endpoint: str, params: Optional[Dict[str, Any]] = Non
     return {}
 
 
-def _resolve_term_id(base: str, account_id: int, term_name: str, lg) -> Optional[int]:
+def _resolve_term_id(session: requests.Session, base: str, account_id: int, term_name: str, lg) -> Optional[int]:
     if account_id is None or not term_name:
         return None
 
@@ -72,6 +72,7 @@ def _resolve_term_id(base: str, account_id: int, term_name: str, lg) -> Optional
 
     try:
         data = _fetch_json(
+            session,
             base,
             f"/v1/accounts/{account_id}/terms",
             params={"enrollment_term[name]": term_name},
@@ -217,7 +218,7 @@ def import_course_settings(
 
         if account_id is None:
             try:
-                course_info = _fetch_json(base, f"/v1/courses/{target_course_id}")
+                course_info = _fetch_json(canvas.session, base, f"/v1/courses/{target_course_id}")
                 account_id = course_info.get("account_id")  # may be int or str
             except Exception as exc:
                 lg.warning("Failed to load target course metadata: %s", exc)
@@ -227,7 +228,7 @@ def import_course_settings(
 
         if resolved_term_id is None and account_id is not None and term_name:
             try:
-                resolved_term_id = _resolve_term_id(base, int(account_id), term_name, lg)
+                resolved_term_id = _resolve_term_id(canvas.session, base, int(account_id), term_name, lg)
             except (TypeError, ValueError):
                 lg.warning(
                     "Unable to parse account id %r when resolving term '%s'",
@@ -246,7 +247,7 @@ def import_course_settings(
         url = _full_url(base, f"/v1/courses/{target_course_id}")
         lg.debug("PUT /courses/%s from course_metadata.json", target_course_id)
         # Canvas expects course-level updates wrapped in {"course": {...}}
-        requests.put(url, json={"course": course_fields})
+        canvas.session.put(url, json={"course": course_fields})
         counts["updated"] += 1
 
     # PUT /courses/:id/settings if present
@@ -254,7 +255,7 @@ def import_course_settings(
     if isinstance(settings, dict) and settings:
         url = _full_url(base, f"/v1/courses/{target_course_id}/settings")
         lg.debug("PUT /courses/%s/settings", target_course_id)
-        requests.put(url, json=settings)
+        canvas.session.put(url, json=settings)
         counts["updated"] += 1
 
     # --- 2) syllabus HTML
@@ -264,7 +265,7 @@ def import_course_settings(
             html = syllabus_html.read_text(encoding="utf-8")
             url = _full_url(base, f"/v1/courses/{target_course_id}")
             lg.debug("PUT syllabus_body via /courses/%s", target_course_id)
-            requests.put(url, json={"course": {"syllabus_body": html}})
+            canvas.session.put(url, json={"course": {"syllabus_body": html}})
             lg.info("Syllabus HTML updated")
             counts["updated"] += 1
         except Exception as e:
@@ -285,7 +286,7 @@ def import_course_settings(
                 url = _full_url(base, f"/v1/courses/{target_course_id}/pages/{new_slug}")
                 lg.debug("PUT wiki_page front_page=true url=%s (old=%s)", new_slug, front_url)
                 try:
-                    resp = requests.put(url, json={"wiki_page": {"front_page": True}})
+                    resp = canvas.session.put(url, json={"wiki_page": {"front_page": True}})
                     resp.raise_for_status()
                     lg.info("Set front page: %s", new_slug)
                     counts["updated"] += 1
@@ -299,7 +300,7 @@ def import_course_settings(
                 url = _full_url(base, f"/v1/courses/{target_course_id}")
                 lg.debug("PUT course default_view=%s home_page_url=%s", default_view, payload.get("home_page_url"))
                 try:
-                    resp = requests.put(url, json={"course": payload})
+                    resp = canvas.session.put(url, json={"course": payload})
                     resp.raise_for_status()
                     counts["updated"] += 1
                 except Exception as e:
@@ -320,7 +321,7 @@ def import_course_settings(
                 "POST /api/v1/courses/%s/blueprint_templates/default/migrations payload=%s",
                 target_course_id, payload
             )
-            requests.post(url, json=payload)
+            canvas.session.post(url, json=payload)
         except Exception as e:
             lg.warning("Could not queue Blueprint sync: %s", e)
 

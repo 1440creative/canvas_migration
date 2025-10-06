@@ -69,6 +69,16 @@ def export_quizzes(
         if not isinstance(detail, dict):
             raise TypeError("Expected quiz detail dict from Canvas API")
 
+        assignment_id = detail.get("assignment_id")
+        assignment_group_id = detail.get("assignment_group_id")
+        if assignment_group_id is None and assignment_id is not None:
+            try:
+                assignment_detail = api.get(f"courses/{course_id}/assignments/{assignment_id}")
+                if isinstance(assignment_detail, dict):
+                    assignment_group_id = assignment_detail.get("assignment_group_id")
+            except Exception:
+                assignment_group_id = assignment_group_id  # keep existing (likely None)
+
         title = (detail.get("title") or detail.get("quiz_title") or f"quiz-{qid}").strip()
         slug = sanitize_slug(title) or f"quiz-{qid}"
 
@@ -122,6 +132,11 @@ def export_quizzes(
         #keep extra Canvas fields
         if "hide_results" in detail:
             meta["hide_results"] = detail["hide_results"]
+
+        if assignment_id is not None:
+            meta["assignment_id"] = assignment_id
+        if assignment_group_id is not None:
+            meta["assignment_group_id"] = assignment_group_id
 
 
         atomic_write(q_dir / "quiz_metadata.json", json_dumps_stable(meta))

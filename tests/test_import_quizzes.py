@@ -19,6 +19,8 @@ def test_import_quizzes_basic(tmp_path, requests_mock):
         # optional fields your importer might pass through:
         "shuffle_answers": True,
         "time_limit": 10,
+        "assignment_id": 5001,
+        "assignment_group_id": 2001,
     }
     (q_dir / "quiz_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
     (q_dir / "description.html").write_text("<p>Good luck!</p>", encoding="utf-8")
@@ -26,10 +28,12 @@ def test_import_quizzes_basic(tmp_path, requests_mock):
     # --- Arrange API mocks
     api_base = "https://api.example.edu"
     create_url = f"{api_base}/api/v1/courses/222/quizzes"
-    requests_mock.post(create_url, json={"id": 9001}, status_code=200)
+    requests_mock.post(create_url, json={"id": 9001, "assignment_id": 6001}, status_code=200)
+    update_url = f"{api_base}/api/v1/courses/222/assignments/6001"
+    update_matcher = requests_mock.put(update_url, json={"id": 6001}, status_code=200)
 
     canvas = DummyCanvas(api_base)
-    id_map = {}
+    id_map = {"assignment_groups": {2001: 3001}}
 
     # --- Act
     counters = importer.import_quizzes(
@@ -44,6 +48,10 @@ def test_import_quizzes_basic(tmp_path, requests_mock):
     assert counters["imported"] == 1
     assert counters["failed"] == 0
     assert id_map["quizzes"][77] == 9001
+    assert id_map["assignments"][5001] == 6001
+    assert update_matcher.called
+    create_payload = requests_mock.request_history[0].json()
+    assert create_payload["quiz"]["assignment_group_id"] == 3001
 
 
 def test_import_quizzes_location_follow(tmp_path, requests_mock):
@@ -122,7 +130,9 @@ def test_import_quizzes_with_questions(tmp_path, requests_mock):
     questions_url = f"{api_base}/api/v1/courses/{course_id}/quizzes/555/questions"
 
     # Create quiz returns id
-    create_matcher = requests_mock.post(create_url, json={"id": 555}, status_code=200)
+    create_matcher = requests_mock.post(create_url, json={"id": 555, "assignment_id": 7555}, status_code=200)
+    update_url = f"{api_base}/api/v1/courses/{course_id}/assignments/7555"
+    update_matcher = requests_mock.put(update_url, json={"id": 7555}, status_code=200)
     # Question posts (same URL hit twice)
     questions_matcher = requests_mock.post(questions_url, json={"id": 9000}, status_code=200)
 
@@ -146,3 +156,4 @@ def test_import_quizzes_with_questions(tmp_path, requests_mock):
     # Ensure we created the quiz and posted both questions
     assert create_matcher.called
     assert questions_matcher.call_count == len(questions)
+    assert not update_matcher.called  # no assignment_group_id provided so no update

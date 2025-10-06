@@ -12,12 +12,13 @@ class DummyAPI:
       - implements .get(endpoint, params=None) returning pre-baked data
     No real HTTP calls are made; this keeps the test stable and fast.
     """
-    def __init__(self, api_root: str, course_id: int, detail_by_id: dict, questions_by_id: dict | None = None):
+    def __init__(self, api_root: str, course_id: int, detail_by_id: dict, questions_by_id: dict | None = None, assignments_by_id: dict | None = None):
         # api_root must look like ".../api/v1/"
         self.api_root = api_root if api_root.endswith("/") else api_root + "/"
         self._course_id = course_id
         self._detail_by_id = detail_by_id
         self._questions_by_id = questions_by_id or {}
+        self._assignments_by_id = assignments_by_id or {}
 
     def get(self, endpoint: str, params=None):
         # Normalize endpoints that the exporter calls:
@@ -43,6 +44,10 @@ class DummyAPI:
                 return self._detail_by_id[qid]
             if len(parts) == 5 and parts[4] == "questions":
                 return self._questions_by_id.get(qid, [])
+
+        if len(parts) == 4 and parts[0] == "courses" and parts[2] == "assignments":
+            aid = int(parts[3])
+            return self._assignments_by_id.get(aid, {})
         raise AssertionError(f"Unexpected endpoint in DummyAPI.get(): {endpoint!r}")
 
 
@@ -184,3 +189,39 @@ def test_export_quizzes_with_questions(tmp_path: Path):
     assert meta["id"] == 10
     expected_rel = (q_dir / "index.html").relative_to(course_root).as_posix()
     assert meta["html_path"] == expected_rel
+
+
+def test_export_quizzes_includes_assignment_group(tmp_path: Path):
+    course_id = 888
+    export_root = tmp_path
+
+    quiz_details = {
+        5: {
+            "id": 5,
+            "title": "Weighted Quiz",
+            "description": "<p>Body</p>",
+            "quiz_type": "graded_quiz",
+            "assignment_id": 5005,
+        }
+    }
+    assignments = {
+        5005: {
+            "id": 5005,
+            "assignment_group_id": 321,
+        }
+    }
+
+    api = DummyAPI(
+        api_root="https://canvas.sfu.ca/api/v1/",
+        course_id=course_id,
+        detail_by_id=quiz_details,
+        assignments_by_id=assignments,
+    )
+
+    exported = export_quizzes(course_id=course_id, export_root=export_root, api=api, include_questions=False)
+    assert exported[0]["assignment_id"] == 5005
+    assert exported[0]["assignment_group_id"] == 321
+
+    meta = _read_json((export_root / str(course_id) / "quizzes" / "001_weighted-quiz" / "quiz_metadata.json"))
+    assert meta["assignment_id"] == 5005
+    assert meta["assignment_group_id"] == 321

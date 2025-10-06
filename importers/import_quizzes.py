@@ -37,6 +37,25 @@ def _coerce_int(val: Any) -> Optional[int]:
         return None
 
 
+def _map_assignment_group_id(raw: Any, id_map: Dict[str, Dict[Any, Any]]) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        candidates = {raw, int(raw)}
+    except (TypeError, ValueError):
+        candidates = {raw}
+    mapping = id_map.get("assignment_groups") if isinstance(id_map, dict) else None
+    if not isinstance(mapping, dict):
+        return None
+    for key in list(candidates):
+        if key in mapping:
+            return _coerce_int(mapping[key])
+        str_key = str(key)
+        if str_key in mapping:
+            return _coerce_int(mapping[str_key])
+    return None
+
+
 def _collapse_ws(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
@@ -289,6 +308,12 @@ def import_quizzes(
 
         old_id = _coerce_int(meta.get("id"))
 
+        old_assignment_id = _coerce_int(meta.get("assignment_id"))
+        desired_group_id = _coerce_int(meta.get("assignment_group_id"))
+        mapped_group_id = _map_assignment_group_id(desired_group_id, id_map)
+        if mapped_group_id is not None:
+            quiz["assignment_group_id"] = mapped_group_id
+
         existing_new_id = None
         if old_id is not None:
             existing_new_id = id_map.get("quizzes", {}).get(old_id)
@@ -353,6 +378,35 @@ def import_quizzes(
         # Map old->new when possible
         if old_id is not None:
             id_map["quizzes"][old_id] = new_id
+
+        new_assignment_id = _coerce_int(body.get("assignment_id"))
+        if new_assignment_id is None:
+            try:
+                detail_url = f"{abs_create_base}/{new_id}"
+                detail_resp = canvas.session.get(detail_url)
+                detail_resp.raise_for_status()
+                detail_body = _resp_json(detail_resp)
+                new_assignment_id = _coerce_int(detail_body.get("assignment_id"))
+                if mapped_group_id is None:
+                    mapped_group_id = _map_assignment_group_id(
+                        _coerce_int(detail_body.get("assignment_group_id")), id_map
+                    )
+            except Exception:
+                new_assignment_id = None
+
+        if old_assignment_id is not None and new_assignment_id is not None:
+            id_map.setdefault("assignments", {})[old_assignment_id] = new_assignment_id
+
+        if mapped_group_id is not None and new_assignment_id is not None:
+            try:
+                update_url = f"{api_root}/courses/{target_course_id}/assignments/{new_assignment_id}"
+                canvas.session.put(update_url, json={"assignment": {"assignment_group_id": mapped_group_id}})
+            except Exception as exc:
+                log.warning(
+                    "failed to update assignment group for quiz assignment id=%s: %s",
+                    new_assignment_id,
+                    exc,
+                )
 
         # Optional: create questions
         if include_questions:
