@@ -110,6 +110,37 @@ def test_sets_default_view_and_front_page(tmp_path, requests_mock):
     assert put_front_page.called
 
 
+def test_sets_apply_assignment_group_weights(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+    course_dir.mkdir(parents=True)
+
+    meta = {
+        "name": "Weighted Course",
+        "course_code": "WC",
+        "apply_assignment_group_weights": True,
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    course_url = f"{api_base}/api/v1/courses/222"
+    requests_mock.put(course_url, json={"ok": True}, status_code=200)
+    requests_mock.put(f"{course_url}/settings", json={"ok": True}, status_code=200)
+
+    import_course_settings(
+        target_course_id=222,
+        export_root=export_root,
+        canvas=canvas,
+        auto_set_term=False,
+        force_course_dates=False,
+    )
+
+    payload = requests_mock.request_history[0].json()["course"]
+    assert payload["apply_assignment_group_weights"] is True
+
+
 def test_blueprint_sync_optional(tmp_path, requests_mock):
     export_root = tmp_path / "export" / "data" / "101"
 

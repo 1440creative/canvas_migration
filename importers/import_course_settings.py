@@ -161,6 +161,7 @@ def import_course_settings(
             "locale": "locale",
             "is_public": "is_public",
             "public_syllabus": "public_syllabus",
+            "apply_assignment_group_weights": "apply_assignment_group_weights",
         }
 
         for src, dest in field_map.items():

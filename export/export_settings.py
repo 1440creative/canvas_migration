@@ -63,6 +63,7 @@ def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) ->
         "workflow_state": course.get("workflow_state"),
         "start_at": course.get("start_at"),
         "end_at": course.get("end_at"),
+        "apply_assignment_group_weights": course.get("apply_assignment_group_weights"),
         "is_blueprint": bool(course.get("blueprint") or course.get("is_blueprint")),
         "default_view": course.get("default_view"),
         "time_zone": course.get("time_zone"),

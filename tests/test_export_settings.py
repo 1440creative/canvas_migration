@@ -24,6 +24,7 @@ def test_export_course_settings(tmp_path: Path):
                 "workflow_state": "available",
                 "start_at": None,
                 "end_at": None,
+                "apply_assignment_group_weights": True,
                 "blueprint": False,
                 "image_id": 4321,
             },
@@ -43,4 +44,5 @@ def test_export_course_settings(tmp_path: Path):
     assert md["id"] == course_id
     assert md["course_image_filename"] == "course-card.png"
     assert md["course_image_display_name"] == "Course Card"
+    assert md["apply_assignment_group_weights"] is True
     assert st["allow_student_forum_attachments"] is True
