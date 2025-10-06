@@ -30,6 +30,68 @@ def _detect_weighted_assignment_groups(export_root: Path) -> Optional[bool]:
     return None
 
 
+def _reapply_assignment_group_weights(
+    *,
+    export_root: Path,
+    canvas,
+    target_course_id: int,
+    id_map: Dict[str, Dict[Any, Any]],
+    log,
+) -> None:
+    groups_dir = export_root / "assignment_groups"
+    if not groups_dir.exists():
+        return
+
+    mapping_raw = id_map.get("assignment_groups") if isinstance(id_map, dict) else {}
+    if not isinstance(mapping_raw, dict):
+        mapping_raw = {}
+
+    api_root = _api_base(canvas)
+
+    for meta_path in sorted(groups_dir.rglob("assignment_group_metadata.json")):
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        old_id = data.get("id")
+        if old_id is None:
+            continue
+        new_id = mapping_raw.get(old_id) or mapping_raw.get(str(old_id))
+        if new_id is None:
+            continue
+
+        weight = data.get("group_weight")
+        if weight is None:
+            continue
+
+        try:
+            new_id_int = int(new_id)
+        except (TypeError, ValueError):
+            continue
+
+        payload = {"assignment_group": {"group_weight": weight}}
+        if data.get("name"):
+            payload["assignment_group"]["name"] = data["name"]
+
+        url = _full_url(api_root, f"/v1/courses/{target_course_id}/assignment_groups/{new_id_int}")
+        try:
+            canvas.session.put(url, json=payload)
+            log.debug(
+                "Reapplied assignment group weight",
+                extra={
+                    "old_id": old_id,
+                    "new_id": new_id_int,
+                    "group_weight": weight,
+                },
+            )
+        except Exception as exc:
+            log.warning(
+                "Failed to reapply group weight",
+                extra={"old_id": old_id, "new_id": new_id_int, "error": str(exc)},
+            )
+
+
 def _read_json(p: Path) -> dict:
     try:
         return json.loads(p.read_text(encoding="utf-8"))
@@ -329,6 +391,18 @@ def import_course_settings(
                     lg.warning("Failed to set default_view=%s: %s", default_view, e)
         except Exception as e:
             lg.warning("Failed to import home.json: %s", e)
+
+    if course_fields.get("apply_assignment_group_weights") or _detect_weighted_assignment_groups(export_root):
+        try:
+            _reapply_assignment_group_weights(
+                export_root=export_root,
+                canvas=canvas,
+                target_course_id=target_course_id,
+                id_map=id_map or {},
+                log=lg,
+            )
+        except Exception as exc:
+            lg.warning("Failed to reapply assignment group weights: %s", exc)
 
     # --- 4) optional: queue blueprint sync
     if queue_blueprint_sync:
