@@ -89,17 +89,43 @@ def scan_export(export_root: Path) -> Dict[str, int]:
     counts["quizzes"] = len(list((export_root / "quizzes").rglob("quiz_metadata.json")))
     counts["files"] = len(list((export_root / "files").rglob("*.metadata.json")))
     counts["discussions"] = len(list((export_root / "discussions").rglob("discussion_metadata.json")))
-    
-    #rubrics: prefer export_root/rubrics - if not present,  look for export_root/<id>/rubrics
-    rubrics_dir = export_root / "rubrics"
-    if not rubrics_dir.exists():
+
+    # Rubrics: prefer consolidated rubrics.json, fall back to per-rubric files under course/.../rubrics
+    rubrics_count = 0
+    rubrics_json = export_root / "rubrics" / "rubrics.json"
+    if rubrics_json.exists():
         try:
-            subdirs = [d for d in export_root.iterdir() if d.is_dir() and d.name.isdigit()]
-            if len(subdirs) == 1:
-                rubrics_dir = subdirs[0] / "rubrics"
+            data = json.loads(rubrics_json.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                rubrics_count = len(data)
         except Exception:
-            pass
-    counts["rubrics"] = len(list(rubrics_dir.glob("rubric_*.json"))) if rubrics_dir.exists() else 0
+            rubrics_count = 0
+    if rubrics_count == 0:
+        parent_rubrics_json = export_root.parent / "rubrics" / "rubrics.json"
+        if parent_rubrics_json.exists():
+            try:
+                data = json.loads(parent_rubrics_json.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    rubrics_count = len(data)
+            except Exception:
+                rubrics_count = 0
+    if rubrics_count == 0:
+        course_rubrics = export_root / "course" / "rubrics"
+        if course_rubrics.exists():
+            rubrics_count = len(list(course_rubrics.glob("rubric_*.json")))
+    counts["rubrics"] = rubrics_count
+
+    # Rubric links live under course/rubric_links.json (list of associations)
+    rubric_links_path = export_root / "course" / "rubric_links.json"
+    if rubric_links_path.exists():
+        try:
+            data = json.loads(rubric_links_path.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                counts["rubric_links"] = len(data)
+            elif isinstance(data, dict):
+                counts["rubric_links"] = len(data.get("links", []))
+        except Exception:
+            counts["rubric_links"] = 0
     mod_file = export_root / "modules" / "modules.json"
     if mod_file.exists():
         try:

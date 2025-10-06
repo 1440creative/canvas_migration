@@ -225,9 +225,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             "created_course_id": created_course_id,
             "id_map_keys": sorted(load_id_map(id_map_path).keys()) if id_map_path.exists() else [],
         }
-        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
-        args.summary_json.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-        print(f"Wrote summary → {args.summary_json}")
+        summary_path = args.summary_json
+        if summary_path.exists() and summary_path.is_dir():
+            summary_path = summary_path / "import_summary.json"
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        print(f"Wrote summary → {summary_path}")
 
     print("Import finished.")
     if result.get("errors"):
