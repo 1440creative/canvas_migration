@@ -14,6 +14,22 @@ log = get_logger(artifact="course_settings", course_id="-")
 _TERM_CACHE: Dict[Tuple[int, str], Optional[int]] = {}
 
 
+def _detect_weighted_assignment_groups(export_root: Path) -> Optional[bool]:
+    groups_dir = export_root / "assignment_groups"
+    if not groups_dir.exists():
+        return None
+
+    for meta_path in groups_dir.rglob("assignment_group_metadata.json"):
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        weight = data.get("group_weight")
+        if isinstance(weight, (int, float)) and weight:
+            return True
+    return None
+
+
 def _read_json(p: Path) -> dict:
     try:
         return json.loads(p.read_text(encoding="utf-8"))
@@ -210,6 +226,11 @@ def import_course_settings(
     course_fields["sis_course_id"] = sis_course_id if sis_course_id is not None else ""
     course_fields["integration_id"] = integration_id if integration_id is not None else ""
     course_fields["sis_import_id"] = sis_import_id if sis_import_id is not None else ""
+
+    if "apply_assignment_group_weights" not in course_fields:
+        inferred = _detect_weighted_assignment_groups(export_root)
+        if inferred is True:
+            course_fields["apply_assignment_group_weights"] = True
 
     # Resolve enrollment term if requested
     resolved_term_id = None
