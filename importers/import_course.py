@@ -413,6 +413,28 @@ def rewrite_canvas_links(
         target_course_id=target_course_id,
     )
 
+    syllabus_pattern = re.compile(
+        rf'(?P<prefix>(?:https?://[^"\'\s]+)?/courses/){source_course_id}/assignments/syllabus(?P<tail>[^"\'\s]*)'
+    )
+
+    def _syllabus_repl(match: re.Match[str]) -> str:
+        prefix = match.group("prefix")
+        tail = match.group("tail") or ""
+        return f"{prefix}{target_course_id}/assignments/syllabus{tail}"
+
+    result = syllabus_pattern.sub(_syllabus_repl, result)
+
+    syllabus_api_pattern = re.compile(
+        rf'(?P<prefix>(?:https?://[^"\'\s]+)?/api/v1/courses/){source_course_id}/assignments/syllabus(?P<tail>[^"\'\s]*)'
+    )
+
+    def _syllabus_api_repl(match: re.Match[str]) -> str:
+        prefix = match.group("prefix")
+        tail = match.group("tail") or ""
+        return f"{prefix}{target_course_id}/assignments/syllabus{tail}"
+
+    result = syllabus_api_pattern.sub(_syllabus_api_repl, result)
+
     if page_slug_map:
         page_pattern = re.compile(
             rf'(?P<prefix>(?:https?://[^"\'\s]+)?/courses/){source_course_id}/pages/(?P<slug>[\w\-]+)(?P<tail>[^"\'\s]*)'
@@ -525,6 +547,58 @@ def _postprocess_html_content(
         for meta_path in assignments_root.rglob("assignment_metadata.json"):
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+    discussions_root = export_root / "discussions"
+    discussion_map = _normalize_numeric_map(id_map.get("discussions"))
+    if discussions_root.exists() and discussion_map:
+        for meta_path in discussions_root.rglob("discussion_metadata.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            old_id = meta.get("id")
+            try:
+                old_id_int = int(old_id)
+            except (TypeError, ValueError):
+                continue
+            new_id = discussion_map.get(old_id_int)
+            if new_id is None:
+                continue
+
+            html_path = meta.get("html_path")
+            candidates = []
+            if isinstance(html_path, str) and html_path:
+                candidates.append(export_root / html_path)
+            dir_path = meta_path.parent
+            candidates.extend(
+                [
+                    dir_path / "index.html",
+                    dir_path / "body.html",
+                    dir_path / "message.html",
+                ]
+            )
+
+            original_html = _read_html_candidate(candidates)
+            if original_html is None:
+                continue
+
+            rewritten = rewrite_canvas_links(
+                original_html,
+                source_course_id=source_course_id,
+                target_course_id=target_course_id,
+                id_map=id_map,
+            )
+            if rewritten == original_html:
+                continue
+
+            try:
+                canvas.put(
+                    f"/api/v1/courses/{target_course_id}/discussion_topics/{new_id}",
+                    json={"discussion_topic": {"message": rewritten}},
+                )
             except Exception:
                 continue
 

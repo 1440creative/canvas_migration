@@ -57,3 +57,22 @@ def test_rewrite_canvas_links_missing_mapping_no_change():
     )
 
     assert rewritten == html
+
+
+def test_rewrite_canvas_links_syllabus_slug():
+    html = (
+        '<a href="https://canvas.test/courses/123/assignments/syllabus">Syllabus</a>'
+        '<a href="/courses/123/assignments/syllabus#summary">Anchor</a>'
+        '<a href="https://canvas.test/api/v1/courses/123/assignments/syllabus?module_item_id=10">API</a>'
+    )
+
+    rewritten = rewrite_canvas_links(
+        html,
+        source_course_id=123,
+        target_course_id=789,
+        id_map={},
+    )
+
+    assert 'courses/789/assignments/syllabus"' in rewritten
+    assert '/courses/789/assignments/syllabus#summary' in rewritten
+    assert '/api/v1/courses/789/assignments/syllabus?module_item_id=10' in rewritten
