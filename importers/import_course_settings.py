@@ -75,21 +75,31 @@ def _reapply_assignment_group_weights(
             payload["assignment_group"]["name"] = data["name"]
 
         url = _full_url(api_root, f"/v1/courses/{target_course_id}/assignment_groups/{new_id_int}")
+        response = None
         try:
-            canvas.session.put(url, json=payload)
-            log.debug(
-                "Reapplied assignment group weight",
+            response = canvas.session.put(url, json=payload)
+            response.raise_for_status()
+        except Exception as exc:
+            log.warning(
+                "Failed to reapply group weight",
                 extra={
                     "old_id": old_id,
                     "new_id": new_id_int,
                     "group_weight": weight,
+                    "status": getattr(response, "status_code", None),
+                    "error": str(exc),
                 },
             )
-        except Exception as exc:
-            log.warning(
-                "Failed to reapply group weight",
-                extra={"old_id": old_id, "new_id": new_id_int, "error": str(exc)},
-            )
+            continue
+
+        log.debug(
+            "Reapplied assignment group weight",
+            extra={
+                "old_id": old_id,
+                "new_id": new_id_int,
+                "group_weight": weight,
+            },
+        )
 
 
 def _read_json(p: Path) -> dict:

@@ -1,5 +1,6 @@
 # tests/test_import_course_settings.py
 import json
+import logging
 from pathlib import Path
 
 from importers.import_course_settings import import_course_settings
@@ -224,6 +225,50 @@ def test_reapplies_assignment_group_weights(tmp_path, requests_mock):
     assert group_matcher.called
     payload = group_matcher.last_request.json()["assignment_group"]
     assert payload["group_weight"] == 35.0
+
+
+def test_reapplies_assignment_group_weights_logs_http_error(tmp_path, requests_mock, caplog):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+    course_dir.mkdir(parents=True)
+
+    meta = {"name": "Weighted Course", "course_code": "WC"}
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    groups_dir = export_root / "assignment_groups" / "001_group"
+    groups_dir.mkdir(parents=True)
+    gmeta = {
+        "id": 11,
+        "name": "Engagement Assessments",
+        "group_weight": 20.0,
+        "assignment_ids": [],
+    }
+    (groups_dir / "assignment_group_metadata.json").write_text(json.dumps(gmeta), encoding="utf-8")
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    course_url = f"{api_base}/api/v1/courses/333"
+    requests_mock.put(course_url, json={"ok": True}, status_code=200)
+    requests_mock.put(f"{course_url}/settings", json={"ok": True}, status_code=200)
+
+    group_put_url = f"{api_base}/api/v1/courses/333/assignment_groups/99"
+    group_matcher = requests_mock.put(group_put_url, json={"error": "nope"}, status_code=400)
+
+    id_map = {"assignment_groups": {11: 99}}
+
+    with caplog.at_level(logging.WARNING, logger="canvas_migrations"):
+        import_course_settings(
+            target_course_id=333,
+            export_root=export_root,
+            canvas=canvas,
+            auto_set_term=False,
+            force_course_dates=False,
+            id_map=id_map,
+        )
+
+    assert group_matcher.called
+    assert "Failed to reapply group weight" in caplog.text
 
 
 def test_blueprint_sync_optional(tmp_path, requests_mock):
