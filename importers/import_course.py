@@ -550,6 +550,50 @@ def _postprocess_html_content(
             except Exception:
                 continue
 
+            old_id = meta.get("id")
+            try:
+                old_id_int = int(old_id)
+            except (TypeError, ValueError):
+                continue
+            new_id = assignment_map.get(old_id_int)
+            if new_id is None:
+                continue
+
+            html_path = meta.get("html_path")
+            candidates = []
+            if isinstance(html_path, str) and html_path:
+                candidates.append(export_root / html_path)
+            dir_path = meta_path.parent
+            candidates.extend(
+                [
+                    dir_path / "description.html",
+                    dir_path / "index.html",
+                    dir_path / "body.html",
+                    dir_path / "message.html",
+                ]
+            )
+
+            original_html = _read_html_candidate(candidates)
+            if original_html is None:
+                continue
+
+            rewritten = rewrite_canvas_links(
+                original_html,
+                source_course_id=source_course_id,
+                target_course_id=target_course_id,
+                id_map=id_map,
+            )
+            if rewritten == original_html:
+                continue
+
+            try:
+                canvas.put(
+                    f"/api/v1/courses/{target_course_id}/assignments/{new_id}",
+                    json={"assignment": {"description": rewritten}},
+                )
+            except Exception:
+                continue
+
     discussions_root = export_root / "discussions"
     discussion_map = _normalize_numeric_map(id_map.get("discussions"))
     if discussions_root.exists() and discussion_map:
@@ -598,50 +642,6 @@ def _postprocess_html_content(
                 canvas.put(
                     f"/api/v1/courses/{target_course_id}/discussion_topics/{new_id}",
                     json={"discussion_topic": {"message": rewritten}},
-                )
-            except Exception:
-                continue
-
-            old_id = meta.get("id")
-            try:
-                old_id_int = int(old_id)
-            except (TypeError, ValueError):
-                continue
-            new_id = assignment_map.get(old_id_int)
-            if new_id is None:
-                continue
-
-            html_path = meta.get("html_path")
-            candidates = []
-            if isinstance(html_path, str) and html_path:
-                candidates.append(export_root / html_path)
-            dir_path = meta_path.parent
-            candidates.extend(
-                [
-                    dir_path / "description.html",
-                    dir_path / "index.html",
-                    dir_path / "body.html",
-                    dir_path / "message.html",
-                ]
-            )
-
-            original_html = _read_html_candidate(candidates)
-            if original_html is None:
-                continue
-
-            rewritten = rewrite_canvas_links(
-                original_html,
-                source_course_id=source_course_id,
-                target_course_id=target_course_id,
-                id_map=id_map,
-            )
-            if rewritten == original_html:
-                continue
-
-            try:
-                canvas.put(
-                    f"/api/v1/courses/{target_course_id}/assignments/{new_id}",
-                    json={"assignment": {"description": rewritten}},
                 )
             except Exception:
                 continue
