@@ -138,24 +138,30 @@ def _sanitize_question_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     if cleaned.get("question_type") == "matching_question":
         normalized_answers: list[dict[str, Any]] = []
-        for ans in cleaned.get("answers", []):
-            if not isinstance(ans, dict):
-                continue
-            left_val = ans.get("left") or ans.get("answer_text") or ans.get("text")
-            right_val = ans.get("right") or ans.get("match_text")
-            ans_norm: dict[str, Any] = {}
-            if left_val:
-                ans_norm["answer_text"] = left_val
-            if right_val:
-                ans_norm["match_text"] = right_val
-            comments = ans.get("comments") or ans.get("comments_html")
-            if comments:
-                ans_norm["comments"] = comments
-            ans_norm.setdefault("weight", 100)
-            normalized_answers.append(ans_norm)
+        normalized_matches: list[dict[str, Any]] = []
+        raw_answers = cleaned.get("answers", [])
+        if isinstance(raw_answers, list):
+            for idx, ans in enumerate(raw_answers, start=1):
+                if not isinstance(ans, dict):
+                    continue
+                left_val = ans.get("left") or ans.get("answer_text") or ans.get("text")
+                right_val = ans.get("right") or ans.get("match_text")
+
+                ans_entry: dict[str, Any] = {"weight": 100, "match_id": idx}
+                if left_val:
+                    ans_entry["answer_text"] = left_val
+                comments = ans.get("comments") or ans.get("comments_html")
+                if comments:
+                    ans_entry["comments"] = comments
+                normalized_answers.append(ans_entry)
+
+                match_entry: dict[str, Any] = {"match_id": idx}
+                if right_val:
+                    match_entry["match_text"] = right_val
+                normalized_matches.append(match_entry)
+
         cleaned["answers"] = normalized_answers
-        # Canvas derives matches from answer match_texts; remove legacy fields
-        cleaned.pop("matches", None)
+        cleaned["matches"] = normalized_matches
 
     for field in ["correct_comments", "incorrect_comments", "neutral_comments"]:
         if cleaned.get(field) is None:
@@ -456,6 +462,10 @@ def import_quizzes(
                         q_start = time.time()
                         resp_q = canvas.session.post(questions_url, json={"question": sanitized})
                         status_q = getattr(resp_q, "status_code", 200)
+                        try:
+                            body_q = resp_q.json()
+                        except Exception:
+                            body_q = {}
                         if status_q >= 400:
                             log.warning(
                                 "failed to create question quiz=%s status=%s detail=%s",
@@ -464,6 +474,7 @@ def import_quizzes(
                                 _summarize_error(resp_q),
                             )
                             continue
+                        log.debug("question POST response quiz=%s body=%s", title, body_q)
                         counters["questions"] += 1
                         log.debug(
                             "question POST complete quiz=%s status=%s duration=%.2fs",
