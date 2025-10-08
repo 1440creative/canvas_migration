@@ -45,6 +45,28 @@ def test_rewrite_canvas_links_numeric_and_pages():
     assert "courses/456/modules/940" in rewritten
 
 
+def test_rewrite_canvas_links_strips_source_host():
+    html = textwrap.dedent(
+        """
+        <img src="https://canvas.test/courses/123/files/45/preview">
+        <a data-api-endpoint="https://canvas.test/api/v1/courses/123/files/45">Data</a>
+        <a href="https://canvas.test/files/45/download">Download</a>
+        """
+    )
+
+    rewritten = rewrite_canvas_links(
+        html,
+        source_course_id=123,
+        target_course_id=456,
+        id_map={"files": {45: 900}},
+    )
+
+    assert "https://canvas.test" not in rewritten
+    assert 'src="/courses/456/files/900/preview"' in rewritten
+    assert 'data-api-endpoint="/api/v1/courses/456/files/900"' in rewritten
+    assert 'href="/files/900/download"' in rewritten
+
+
 def test_rewrite_canvas_links_missing_mapping_no_change():
     html = '<a href="https://canvas.test/courses/123/files/45">File</a>'
     id_map = {"files": {}}  # no mapping available
@@ -76,3 +98,4 @@ def test_rewrite_canvas_links_syllabus_slug():
     assert 'courses/789/assignments/syllabus"' in rewritten
     assert '/courses/789/assignments/syllabus#summary' in rewritten
     assert '/api/v1/courses/789/assignments/syllabus?module_item_id=10' in rewritten
+    assert "https://canvas.test" not in rewritten

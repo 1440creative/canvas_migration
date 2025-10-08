@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol
 
@@ -297,6 +298,20 @@ def _normalize_numeric_map(raw: Dict[Any, Any] | None) -> Dict[int, int]:
     return normalized
 
 
+def _normalize_canvas_prefix(prefix: str) -> str:
+    if prefix.startswith(("http://", "https://")):
+        parsed = urlsplit(prefix)
+    elif prefix.startswith("//"):
+        parsed = urlsplit(prefix, scheme="https")
+    else:
+        return prefix
+
+    normalized = parsed.path or "/"
+    if prefix.endswith("/") and not normalized.endswith("/"):
+        normalized += "/"
+    return normalized
+
+
 def _replace_numeric_links(
     html: str,
     *,
@@ -318,7 +333,7 @@ def _replace_numeric_links(
 
     def _sub(pattern: re.Pattern[str], text: str) -> str:
         def _repl(match: re.Match[str]) -> str:
-            prefix = match.group("prefix")
+            prefix = _normalize_canvas_prefix(match.group("prefix"))
             old_id = match.group("id")
             tail = match.group("tail") or ""
             new_id = _lookup(old_id)
@@ -344,7 +359,7 @@ def _replace_numeric_links(
         )
 
         def _global_repl(match: re.Match[str]) -> str:
-            prefix = match.group("prefix")
+            prefix = _normalize_canvas_prefix(match.group("prefix"))
             old_id = match.group("id")
             tail = match.group("tail") or ""
             new_id = _lookup(old_id)
@@ -418,7 +433,7 @@ def rewrite_canvas_links(
     )
 
     def _syllabus_repl(match: re.Match[str]) -> str:
-        prefix = match.group("prefix")
+        prefix = _normalize_canvas_prefix(match.group("prefix"))
         tail = match.group("tail") or ""
         return f"{prefix}{target_course_id}/assignments/syllabus{tail}"
 
@@ -429,7 +444,7 @@ def rewrite_canvas_links(
     )
 
     def _syllabus_api_repl(match: re.Match[str]) -> str:
-        prefix = match.group("prefix")
+        prefix = _normalize_canvas_prefix(match.group("prefix"))
         tail = match.group("tail") or ""
         return f"{prefix}{target_course_id}/assignments/syllabus{tail}"
 
@@ -441,7 +456,7 @@ def rewrite_canvas_links(
         )
 
         def _page_repl(match: re.Match[str]) -> str:
-            prefix = match.group("prefix")
+            prefix = _normalize_canvas_prefix(match.group("prefix"))
             old_slug = match.group("slug")
             tail = match.group("tail") or ""
             new_slug = page_slug_map.get(old_slug)
@@ -456,7 +471,7 @@ def rewrite_canvas_links(
         )
 
         def _page_api_repl(match: re.Match[str]) -> str:
-            prefix = match.group("prefix")
+            prefix = _normalize_canvas_prefix(match.group("prefix"))
             old_slug = match.group("slug")
             tail = match.group("tail") or ""
             new_slug = page_slug_map.get(old_slug)
@@ -465,6 +480,8 @@ def rewrite_canvas_links(
             return f"{prefix}{target_course_id}/pages/{new_slug}{tail}"
 
         result = page_api_pattern.sub(_page_api_repl, result)
+
+    result = re.sub(r"https?:/(?=[^/])", "/", result)
 
     return result
 
