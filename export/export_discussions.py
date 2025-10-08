@@ -66,6 +66,17 @@ def export_discussions(course_id: int, export_root: Path, api: CanvasAPI) -> Lis
         html_path = d_dir / "index.html"
         atomic_write(html_path, html)
 
+        assignment_id = detail.get("assignment_id")
+        if assignment_id is None:
+            assignment = detail.get("assignment")
+            if isinstance(assignment, dict):
+                assignment_id = assignment.get("id")
+        if assignment_id is not None:
+            try:
+                assignment_id = int(assignment_id)
+            except (TypeError, ValueError):
+                assignment_id = None
+
         # Build metadata (trim but useful)
         meta: Dict[str, Any] = {
             "id": did,
@@ -84,6 +95,7 @@ def export_discussions(course_id: int, export_root: Path, api: CanvasAPI) -> Lis
             "module_item_ids": [],  # backfilled by modules exporter
             "source_api_url": api.api_root.rstrip("/") + f"/courses/{course_id}/discussion_topics/{did}",
         }
+        meta["assignment_id"] = assignment_id
 
         atomic_write(d_dir / "discussion_metadata.json", json_dumps_stable(meta))
         exported.append(meta)

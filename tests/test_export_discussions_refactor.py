@@ -43,3 +43,4 @@ def test_export_discussions_basic(tmp_path: Path):
     assert meta["title"] == "Week 1 Discussion"
     assert meta["module_item_ids"] == []
     assert meta["html_path"].endswith("discussions/001_week-1-discussion/index.html")
+    assert meta["assignment_id"] is None

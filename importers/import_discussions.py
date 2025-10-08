@@ -85,6 +85,20 @@ def import_discussions(
 
         total += 1
 
+        assignment_id = meta.get("assignment_id")
+        try:
+            assignment_id = int(assignment_id)
+        except (TypeError, ValueError):
+            assignment_id = None
+
+        if assignment_id:
+            skipped += 1
+            log.info(
+                "Skipping graded discussion; assignment will recreate it.",
+                extra={"title": meta.get("title"), "assignment_id": assignment_id},
+            )
+            continue
+
         # Skip announcements; handled by the announcements importer
         if bool(meta.get("is_announcement")):
             skipped += 1
