@@ -148,7 +148,18 @@ def _sanitize_question_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
     if cleaned.get("question_type") == "matching_question":
         matches = raw.get("matches")
         if isinstance(matches, list):
-            cleaned["matches"] = matches
+            normalized_matches: list[dict[str, Any]] = []
+            for m in matches:
+                if not isinstance(m, dict):
+                    continue
+                new_m = dict(m)
+                text_val = new_m.get("text")
+                if text_val and "match_text" not in new_m:
+                    new_m["match_text"] = text_val
+                if text_val and "answer_text" not in new_m:
+                    new_m["answer_text"] = text_val
+                normalized_matches.append(new_m)
+            cleaned["matches"] = normalized_matches
         for ans_clean in cleaned.get("answers", []):
             if not isinstance(ans_clean, dict):
                 continue
@@ -457,6 +468,7 @@ def import_quizzes(
                     if not isinstance(q, dict):
                         continue
                     sanitized = _sanitize_question_payload(q)
+                    log.debug("posting question payload quiz=%s data=%s", title, sanitized)
                     try:
                         q_start = time.time()
                         resp_q = canvas.session.post(questions_url, json={"question": sanitized})
