@@ -133,8 +133,15 @@ def _sanitize_question_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
                 if key in _ANSWER_DROP_KEYS:
                     continue
                 ans_clean[key] = value
-            if "answer_text" not in ans_clean and "text" in ans_clean:
-                ans_clean["answer_text"] = ans_clean["text"]
+            text_val = ans_clean.get("text")
+            if "answer_text" not in ans_clean:
+                left_val = ans_clean.get("left")
+                if left_val:
+                    ans_clean["answer_text"] = left_val
+                elif text_val:
+                    ans_clean["answer_text"] = text_val
+            if text_val is not None and "text" not in ans_clean:
+                ans_clean["text"] = text_val
             new_answers.append(ans_clean)
         cleaned["answers"] = new_answers
 
@@ -142,6 +149,19 @@ def _sanitize_question_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
         matches = raw.get("matches")
         if isinstance(matches, list):
             cleaned["matches"] = matches
+        for ans_clean in cleaned.get("answers", []):
+            if not isinstance(ans_clean, dict):
+                continue
+            match_text = ans_clean.get("match_text")
+            if not match_text:
+                right_val = ans_clean.get("right")
+                if right_val:
+                    ans_clean["match_text"] = right_val
+            # Canvas expects answer_text for the left column
+            if not ans_clean.get("answer_text"):
+                left_val = ans_clean.get("left") or ans_clean.get("text")
+                if left_val:
+                    ans_clean["answer_text"] = left_val
 
     for field in ["correct_comments", "incorrect_comments", "neutral_comments"]:
         if cleaned.get(field) is None:
