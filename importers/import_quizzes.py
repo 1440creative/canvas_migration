@@ -133,46 +133,29 @@ def _sanitize_question_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
                 if key in _ANSWER_DROP_KEYS:
                     continue
                 ans_clean[key] = value
-            text_val = ans_clean.get("text")
-            if "answer_text" not in ans_clean:
-                left_val = ans_clean.get("left")
-                if left_val:
-                    ans_clean["answer_text"] = left_val
-                elif text_val:
-                    ans_clean["answer_text"] = text_val
-            if text_val is not None and "text" not in ans_clean:
-                ans_clean["text"] = text_val
             new_answers.append(ans_clean)
         cleaned["answers"] = new_answers
 
     if cleaned.get("question_type") == "matching_question":
-        matches = raw.get("matches")
-        if isinstance(matches, list):
-            normalized_matches: list[dict[str, Any]] = []
-            for m in matches:
-                if not isinstance(m, dict):
-                    continue
-                new_m = dict(m)
-                text_val = new_m.get("text")
-                if text_val and "match_text" not in new_m:
-                    new_m["match_text"] = text_val
-                if text_val and "answer_text" not in new_m:
-                    new_m["answer_text"] = text_val
-                normalized_matches.append(new_m)
-            cleaned["matches"] = normalized_matches
-        for ans_clean in cleaned.get("answers", []):
-            if not isinstance(ans_clean, dict):
+        normalized_answers: list[dict[str, Any]] = []
+        for ans in cleaned.get("answers", []):
+            if not isinstance(ans, dict):
                 continue
-            match_text = ans_clean.get("match_text")
-            if not match_text:
-                right_val = ans_clean.get("right")
-                if right_val:
-                    ans_clean["match_text"] = right_val
-            # Canvas expects answer_text for the left column
-            if not ans_clean.get("answer_text"):
-                left_val = ans_clean.get("left") or ans_clean.get("text")
-                if left_val:
-                    ans_clean["answer_text"] = left_val
+            left_val = ans.get("left") or ans.get("answer_text") or ans.get("text")
+            right_val = ans.get("right") or ans.get("match_text")
+            ans_norm: dict[str, Any] = {}
+            if left_val:
+                ans_norm["answer_text"] = left_val
+            if right_val:
+                ans_norm["match_text"] = right_val
+            comments = ans.get("comments") or ans.get("comments_html")
+            if comments:
+                ans_norm["comments"] = comments
+            ans_norm.setdefault("weight", 100)
+            normalized_answers.append(ans_norm)
+        cleaned["answers"] = normalized_answers
+        # Canvas derives matches from answer match_texts; remove legacy fields
+        cleaned.pop("matches", None)
 
     for field in ["correct_comments", "incorrect_comments", "neutral_comments"]:
         if cleaned.get(field) is None:
