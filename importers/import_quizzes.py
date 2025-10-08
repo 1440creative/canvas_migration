@@ -134,7 +134,7 @@ def _sanitize_question_payload(raw: Dict[str, Any]) -> Dict[str, Any]:
                     continue
                 ans_clean[key] = value
             if "answer_text" not in ans_clean and "text" in ans_clean:
-                ans_clean["answer_text"] = ans_clean.pop("text")
+                ans_clean["answer_text"] = ans_clean["text"]
             new_answers.append(ans_clean)
         cleaned["answers"] = new_answers
 
