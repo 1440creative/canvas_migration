@@ -59,6 +59,7 @@ def test_missing_target_id_creates_course(tmp_path, monkeypatch, capsys):
 
     def fake_import_course(*, target_course_id, **kwargs):  # type: ignore[no-untyped-def]
         created["target_id"] = target_course_id
+        created["include_quiz_questions"] = kwargs.get("include_quiz_questions")
         return {"counts": {}, "errors": []}
 
     monkeypatch.setattr("scripts.run_import.import_course", fake_import_course)
@@ -75,5 +76,33 @@ def test_missing_target_id_creates_course(tmp_path, monkeypatch, capsys):
 
     assert rc == 0
     assert created.get("target_id") == 555
+    assert created.get("include_quiz_questions") is True
     output = capsys.readouterr().out
     assert "Created new Canvas course 555" in output
+
+
+def test_skip_quiz_questions_flag(tmp_path, monkeypatch):
+    export_root = tmp_path / "export" / "data" / "101"
+    export_root.mkdir(parents=True, exist_ok=True)
+
+    captured: dict[str, object] = {}
+
+    def fake_import_course(*, target_course_id, **kwargs):  # type: ignore[no-untyped-def]
+        captured["include_quiz_questions"] = kwargs.get("include_quiz_questions")
+        return {"counts": {}, "errors": []}
+
+    monkeypatch.setattr("scripts.run_import.import_course", fake_import_course)
+    monkeypatch.setattr("utils.api.CanvasAPI", _FakeCanvasAPI)
+    monkeypatch.setenv("CANVAS_TARGET_URL", "https://canvas.test")
+    monkeypatch.setenv("CANVAS_TARGET_TOKEN", "token")
+
+    rc = main([
+        "--export-root",
+        str(export_root),
+        "--target-course-id",
+        "321",
+        "--skip-quiz-questions",
+    ])
+
+    assert rc == 0
+    assert captured.get("include_quiz_questions") is False

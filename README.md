@@ -88,7 +88,6 @@ CANVAS_TARGET_TOKEN=
 ```bash
 python scripts/run_import.py \
   --export-root export/data/<SOURCE_ID> \
-  --include-quiz-questions \
   --target-account-id <ACCOUNT_ID> \
   --target-course-id <TARGET_ID> \
   --blueprint-sync \
@@ -121,7 +120,9 @@ By default the importer also assigns the target course to the 'Default' enrollme
 By default the importer clears SIS identifiers (sis_course_id, integration_id, sis_import_id). You can set new values with `--sis-course-id`, `--integration-id`, or `--sis-import-id` when running `scripts/run_import.py`.
 
 Course hero images are remapped automatically when the original image file was exported and imported—the importer uses `id_map.json` to swap the old image file id for the new one before issuing the final course settings update.
- so links to the source course (files, assignments, quizzes, discussions, modules, pages) are updated to the new target IDs using the generated `id_map.json`. No manual link cleanup is required as long as pages, assignments, files, quizzes, discussions, and modules are included in the import.
+so links to the source course (files, assignments, quizzes, discussions, modules, pages) are updated to the new target IDs using the generated `id_map.json`. No manual link cleanup is required as long as pages, assignments, files, quizzes, discussions, and modules are included in the import.
+
+Quiz question payloads are now exported and imported by default. Use `--skip-questions` with `scripts/run_export.py` or `--skip-quiz-questions` with `scripts/run_import.py` if you need to opt out for troubleshooting.
 
 
 ---

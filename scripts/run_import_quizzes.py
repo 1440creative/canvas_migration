@@ -13,7 +13,19 @@ def parse_args():
     p = argparse.ArgumentParser(description="Import Quizzes only")
     p.add_argument("--export-root", required=True, type=Path)
     p.add_argument("--target-course-id", required=True, type=int)
-    p.add_argument("--include-questions", action="store_true")
+    p.add_argument(
+        "--include-questions",
+        dest="include_questions",
+        action="store_true",
+        default=True,
+        help="Import quiz questions.json payloads (default: enabled).",
+    )
+    p.add_argument(
+        "--skip-questions",
+        dest="include_questions",
+        action="store_false",
+        help="Skip importing quiz questions.",
+    )
     p.add_argument("--id-map", type=Path)
     p.add_argument("-v", "--verbose", action="count", default=1)
     return p.parse_args()

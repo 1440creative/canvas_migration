@@ -107,7 +107,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Resume using existing id_map.json in export-root (if present).")
     ap.add_argument("--id-map", type=Path, default=None,
                     help="Override path to id_map.json (default: <export-root>/id_map.json)")
-    ap.add_argument("--include-quiz-questions", action="store_true", help="Also import quiz questions.")
+    ap.add_argument(
+        "--include-quiz-questions",
+        dest="include_quiz_questions",
+        action="store_true",
+        default=True,
+        help="Also import quiz questions (default: enabled).",
+    )
+    ap.add_argument(
+        "--skip-quiz-questions",
+        dest="include_quiz_questions",
+        action="store_false",
+        help="Skip importing quiz questions even if questions.json is present.",
+    )
     ap.add_argument("--term-name", default="Default",
                     help="Enrollment term name to assign in the target course (default: 'Default'). Use empty string to skip.")
     ap.add_argument("--term-id", type=int, default=None,

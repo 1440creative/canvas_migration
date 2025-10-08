@@ -57,7 +57,19 @@ def main() -> int:
     p.add_argument("--course-id", type=int, required=True, help="Canvas course id to export")
     p.add_argument("--export-root", type=Path, required=True, help="Root directory for export data (e.g., export/data)")
     p.add_argument("--steps", nargs="+", choices=ALL_STEPS, default=ALL_STEPS, help="Subset of steps to run (default: all)")
-    p.add_argument("--include-questions", action="store_true", help="Include quiz questions.json")
+    p.add_argument(
+        "--include-questions",
+        dest="include_questions",
+        action="store_true",
+        default=True,
+        help="Include quiz questions.json (default: enabled).",
+    )
+    p.add_argument(
+        "--skip-questions",
+        dest="include_questions",
+        action="store_false",
+        help="Skip exporting quiz questions.json.",
+    )
     p.add_argument("-v", "--verbose", action="count", default=0, help="Increase verbosity (-v, -vv)")
     p.add_argument("--continue-on-error", action="store_true", help="Continue other steps if one fails")
     args = p.parse_args()
