@@ -62,7 +62,9 @@ def test_upload_basic_updates_id_map(tmp_export, id_map, requests_mock, dummy_ca
 
     assert id_map["files"][42] == 9001
     man = json.loads(_manifest_path(tmp_export).read_text(encoding="utf-8"))
-    assert "sub/inner/a.txt" in man and man["sub/inner/a.txt"]["new_id"] == 9001
+    entry = man["sub/inner/a.txt"]
+    assert entry["new_id"] == 9001
+    assert entry["target_course_id"] == 101
 
 def test_upload_handles_redirect_finalize(tmp_export, id_map, requests_mock, dummy_canvas):
     _ = _write_exported_file(tmp_export, "only/a.txt", file_id=7, file_name="a.txt", folder_path=None, content=b"abc")
@@ -93,3 +95,20 @@ def test_manifest_skip_counts_as_skipped(tmp_export, id_map, requests_mock, dumm
 
     msgs = [r.getMessage().lower() for r in caplog.records]
     assert any("skipped upload (same sha256)" in m for m in msgs), msgs
+
+
+def test_manifest_skip_requires_matching_course(tmp_export, id_map, requests_mock, dummy_canvas):
+    _ = _write_exported_file(tmp_export, "dup/a.txt", file_id=1, file_name="a.txt", content=b"xyz")
+    requests_mock.post("https://uploads.test/upload", json={"id": 5000}, status_code=200)
+
+    # Initial upload to course 101
+    import_files(target_course_id=101, export_root=tmp_export, canvas=dummy_canvas, id_map=id_map)
+
+    # Change course; expect a second upload because manifest course id differs
+    requests_mock.post("https://uploads.test/upload", json={"id": 6000}, status_code=200)
+    id_map.clear()
+    import_files(target_course_id=202, export_root=tmp_export, canvas=dummy_canvas, id_map=id_map)
+
+    assert id_map["files"][1] == 6000
+    man = json.loads(_manifest_path(tmp_export).read_text(encoding="utf-8"))
+    assert man["dup/a.txt"]["target_course_id"] == 202

@@ -282,12 +282,13 @@ def import_files(
         if local_sha:
             prev = manifest.get(manifest_key)
             if isinstance(prev, dict) and prev.get("sha256") == local_sha:
+                prev_course_id = _coerce_int(prev.get("target_course_id"))
                 prev_new_id = _coerce_int(prev.get("new_id"))
-                if prev_new_id is not None:
+                if prev_course_id == target_course_id and prev_new_id is not None:
                     id_map["files"][old_id] = prev_new_id
-                skipped += 1
-                logger.info("Skipped upload (same sha256): %s → existing_id=%s", rel, prev_new_id)
-                continue
+                    skipped += 1
+                    logger.info("Skipped upload (same sha256): %s → existing_id=%s", rel, prev_new_id)
+                    continue
 
         # Compute *deterministic* folder path: {course}/files[/subdirs]
         subdir = Path(rel).parent.as_posix()
@@ -313,7 +314,11 @@ def import_files(
 
             # Update manifest with sha + id for future skips
             if local_sha:
-                manifest[manifest_key] = {"sha256": local_sha, "new_id": int(new_id)}
+                manifest[manifest_key] = {
+                    "sha256": local_sha,
+                    "new_id": int(new_id),
+                    "target_course_id": target_course_id,
+                }
 
         except Exception as e:
             failed += 1
