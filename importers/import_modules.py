@@ -119,6 +119,20 @@ def _extract_module_id(canvas, resp: Any) -> Optional[int]:
     return None
 
 
+def _coerce_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y"}:
+            return True
+        if lowered in {"false", "0", "no", "n"}:
+            return False
+    return bool(value)
+
+
 def _make_item_payload(
     item: Dict[str, Any],
     *,
@@ -130,7 +144,9 @@ def _make_item_payload(
     """
     t = (item.get("type") or "").strip()
     title = item.get("title") or ""
-    published = bool(item.get("published", False))
+    published = _coerce_bool(item.get("published"))
+    if published is None:
+        published = False
 
     if t == "Page":
         src_slug = item.get("page_url")
@@ -266,9 +282,10 @@ def import_modules(
 
     for m in data:
         name = (m or {}).get("name") or "Untitled Module"
+        src_published = _coerce_bool((m or {}).get("published"))
         mod_payload = {"name": name}
-        if (m or {}).get("published") is not None:
-            mod_payload["published"] = bool(m.get("published"))
+        if src_published is not None:
+            mod_payload["published"] = src_published
 
         try:
             # Use ABSOLUTE URL so requests_mock matches test setup
@@ -319,10 +336,7 @@ def import_modules(
                 continue
 
             try:
-                if api_root:
-                    items_url = f"{api_root}/courses/{target_course_id}/modules/{new_mod_id}/items" if api_root.endswith("/api/v1") else f"{api_root}/api/v1/courses/{target_course_id}/modules/{new_mod_id}/items"
-                else:
-                    items_url = f"/api/v1/courses/{target_course_id}/modules/{new_mod_id}/items"
+                items_url = f"{base_modules}/{new_mod_id}/items"
                 r_item = canvas.session.post(items_url, json=payload)
                 status_item = getattr(r_item, "status_code", None)
                 if status_item and status_item >= 400:
@@ -350,6 +364,27 @@ def import_modules(
                 )
             finally:
                 position += 1
+
+        if src_published:
+            module_detail_url = f"{base_modules}/{new_mod_id}"
+            try:
+                resp_publish = canvas.session.put(module_detail_url, json={"module": {"published": True}})
+                status_publish = getattr(resp_publish, "status_code", None)
+                if status_publish and status_publish >= 400:
+                    log.warning(
+                        "failed to publish module id=%s name=%r status=%s detail=%s",
+                        new_mod_id,
+                        name,
+                        status_publish,
+                        _summarize_error(resp_publish),
+                    )
+            except Exception as e:
+                log.warning(
+                    "failed to publish module id=%s name=%r error=%s",
+                    new_mod_id,
+                    name,
+                    e,
+                )
 
     log.info(
         "Modules import complete. modules_created=%d modules_failed=%d items_created=%d items_skipped=%d items_failed=%d total_modules=%d",

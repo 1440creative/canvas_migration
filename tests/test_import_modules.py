@@ -142,3 +142,41 @@ def test_import_modules_skips_when_mapping_missing(tmp_path, requests_mock):
     assert counters["items_created"] == 0
     assert counters["items_skipped"] == 2
     assert counters["modules_failed"] == 0
+
+
+def test_import_modules_publishes_module_when_source_published(tmp_path, requests_mock, monkeypatch):
+    export_root = tmp_path / "export" / "data" / "123"
+    mods = [{"name": "Week 1", "published": True, "items": []}]
+    _write_modules_json(export_root, mods)
+
+    id_map = {}
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    requests_mock.post(
+        f"{api_base}/api/v1/courses/999/modules",
+        json={"id": 42, "name": "Week 1"},
+        status_code=200,
+    )
+    requests_mock.put(
+        f"{api_base}/api/v1/courses/999/modules/42",
+        json={"id": 42, "published": True},
+        status_code=200,
+    )
+
+    project_root = Path(os.getcwd())
+    importer = load_importer(project_root, module="importers.import_modules")
+
+    counters = importer.import_modules(
+        target_course_id=999,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+    )
+
+    assert counters["modules_created"] == 1
+    publish_calls = [
+        req for req in requests_mock.request_history if req.method == "PUT" and req.url.endswith("/modules/42")
+    ]
+    assert len(publish_calls) == 1
+    assert publish_calls[0].json() == {"module": {"published": True}}
