@@ -490,3 +490,85 @@ def test_applies_course_navigation(tmp_path, requests_mock):
     assert mod_payload["position"] == 2
     assert mod_payload.get("hidden") is False
     assert counts["updated"] >= 3  # course PUT + two tab updates
+
+
+def test_uploads_course_image_when_missing_id_map(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+    course_dir.mkdir(parents=True, exist_ok=True)
+
+    (course_dir / "course-card.png").write_bytes(b"image-data")
+
+    meta = {
+        "name": "Design 200",
+        "image_id": 111,
+        "course_image_export_path": "course-card.png",
+        "course_image_filename": "course-card.png",
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/222",
+        json={"ok": True},
+        status_code=200,
+    )
+    requests_mock.post("https://uploads.test/upload", json={"id": 555}, status_code=200)
+
+    id_map = {"files": {}}
+    counts = import_course_settings(
+        target_course_id=222,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+        auto_set_term=False,
+        force_course_dates=False,
+    )
+
+    assert put_course.called
+    payload = put_course.last_request.json()["course"]
+    assert payload["image_id"] == 555
+    assert payload["image_url"] is None
+    assert id_map["files"][111] == 555
+    assert counts["updated"] >= 1
+
+
+def test_uploads_course_image_without_original_id(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+    course_dir.mkdir(parents=True, exist_ok=True)
+
+    (course_dir / "course-image.jpg").write_bytes(b"image-data")
+
+    meta = {
+        "name": "History 101",
+        "course_image_export_path": "course-image.jpg",
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/333",
+        json={"ok": True},
+        status_code=200,
+    )
+    requests_mock.post("https://uploads.test/upload", json={"id": 777}, status_code=200)
+
+    counts = import_course_settings(
+        target_course_id=333,
+        export_root=export_root,
+        canvas=canvas,
+        id_map={},
+        auto_set_term=False,
+        force_course_dates=False,
+    )
+
+    assert put_course.called
+    payload = put_course.last_request.json()["course"]
+    assert payload["image_id"] == 777
+    assert payload["image_url"] is None
+    assert counts["updated"] >= 1

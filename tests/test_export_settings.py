@@ -27,6 +27,7 @@ def test_export_course_settings(tmp_path: Path):
                 "apply_assignment_group_weights": True,
                 "blueprint": False,
                 "image_id": 4321,
+                "image_url": "https://canvas.test/files/course-card.png",
             },
         )
         m.get(
@@ -43,6 +44,12 @@ def test_export_course_settings(tmp_path: Path):
                 {"id": "assignments", "label": "Assignments", "position": 2, "hidden": False},
             ],
         )
+        m.get(
+            "https://canvas.test/files/course-card.png",
+            content=b"\x89PNG",
+            headers={"Content-Type": "image/png"},
+            status_code=200,
+        )
 
         info = export_course_settings(course_id, root, api)
 
@@ -58,3 +65,7 @@ def test_export_course_settings(tmp_path: Path):
     assert [item["id"] for item in nav] == ["home", "assignments", "modules"]
     assert nav[1]["position"] == 2
     assert nav[2]["hidden"] is True
+    assert md["course_image_export_path"] == "course-card.png"
+    image_path = root / str(course_id) / "course" / md["course_image_export_path"]
+    assert image_path.exists()
+    assert image_path.read_bytes() == b"\x89PNG"

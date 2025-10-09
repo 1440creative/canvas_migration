@@ -1,10 +1,31 @@
 # tests/test_run_import_dry_run.py
-import os, sys, subprocess
+import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 def test_cli_dry_run_plan():
     project_root = Path.cwd()
     export_root = project_root / "sandbox_export" / "data" / "901"
+
+    # Build a minimal export fixture with one item per step
+    if export_root.exists():
+        shutil.rmtree(export_root)
+
+    def _write_json(path: Path, payload):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    _write_json(export_root / "pages" / "page_metadata.json", {"id": 1, "title": "Sample Page"})
+    _write_json(export_root / "assignment_groups" / "assignment_group_metadata.json", {"id": 10})
+    _write_json(export_root / "assignments" / "assignment_metadata.json", {"id": 20})
+    _write_json(export_root / "quizzes" / "quiz_metadata.json", {"id": 30})
+    _write_json(export_root / "files" / "sample.txt.metadata.json", {"id": 40, "filename": "sample.txt"})
+    _write_json(export_root / "discussions" / "discussion_metadata.json", {"id": 50})
+    _write_json(export_root / "modules" / "modules.json", [{"id": 60}])
+    _write_json(export_root / "course" / "course_metadata.json", {"id": 901, "name": "Sample Course"})
 
     # Ensure a .env exists so utils.api can instantiate clients at import-time
     env_path = project_root / ".env"

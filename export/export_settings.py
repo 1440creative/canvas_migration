@@ -1,13 +1,76 @@
 # export/export_settings.py
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from logging_setup import get_logger
-from utils.api import CanvasAPI
+from utils.api import CanvasAPI, DEFAULT_TIMEOUT
 from utils.fs import ensure_dir, atomic_write, json_dumps_stable
 from .export_syllabus import export_syllabus as export_course_syllabus
+
+_IMAGE_CHUNK = 1024 * 512  # 512 KiB
+
+
+def _safe_name(candidate: str) -> str:
+    """Return basename without directory components."""
+    name = Path(candidate or "").name
+    return name or "course_image"
+
+
+def _download_course_image(
+    *,
+    api: CanvasAPI,
+    image_url: str,
+    metadata: Dict[str, Any],
+    dest_dir: Path,
+    log,
+) -> Optional[str]:
+    """
+    Download the course card image so we can re-upload during import.
+    Returns relative filename if successful.
+    """
+    try:
+        response = api.session.get(image_url, stream=True, timeout=DEFAULT_TIMEOUT)
+        response.raise_for_status()
+    except Exception as exc:
+        log.warning("Failed to download course image: %s", exc)
+        return None
+
+    preferred = metadata.get("course_image_filename") or metadata.get("course_image_display_name")
+    parsed_path = urlparse(image_url).path
+    from_url = Path(parsed_path).name
+    candidate = _safe_name(preferred or from_url or "course_image")
+
+    # Ensure we have an extension (prefer metadata, then URL path, then content-type)
+    suffix = Path(candidate).suffix
+    if not suffix:
+        url_suffix = Path(from_url).suffix
+        content_type = response.headers.get("Content-Type") or response.headers.get("content-type")
+        guessed = None
+        if content_type:
+            guessed = mimetypes.guess_extension(content_type.split(";")[0].strip()) or None
+        ext = url_suffix or guessed or ".jpg"
+        if not ext.startswith("."):
+            ext = f".{ext}"
+        candidate = f"{candidate}{ext}"
+
+    dest_path = dest_dir / candidate
+    try:
+        with response as resp:
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            with dest_path.open("wb") as fh:
+                for chunk in resp.iter_content(_IMAGE_CHUNK):
+                    if chunk:
+                        fh.write(chunk)
+    except Exception as exc:
+        log.warning("Failed to save course image %s: %s", dest_path, exc)
+        return None
+
+    log.debug("Exported course image to %s", dest_path)
+    return dest_path.name
 
 def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) -> Dict[str, Any]:
     """
@@ -72,6 +135,13 @@ def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) ->
         raise TypeError("Expected settings dict from Canvas API")
 
     metadata["settings"] = settings
+
+    image_url = metadata.get("image_url")
+    if image_url:
+        rel_image = _download_course_image(api=api, image_url=image_url, metadata=metadata, dest_dir=out_dir, log=log)
+        if rel_image:
+            metadata["course_image_export_path"] = rel_image
+
     atomic_write(out_dir / "course_metadata.json", json_dumps_stable(metadata))
     atomic_write(out_dir / "course_settings.json", json_dumps_stable(settings))
 

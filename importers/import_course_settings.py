@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple, List
 
 import requests
 from logging_setup import get_logger
+from importers.import_files import _upload_one
 
 # Safe module-level logger (no course id at import time)
 log = get_logger(artifact="course_settings", course_id="-")
@@ -175,6 +176,54 @@ def _load_navigation_spec(course_dir: Path, lg) -> List[Dict[str, Any]]:
         return [item for item in nav_items if isinstance(item, dict) and item.get("id")]
     lg.debug("course_navigation.json missing; using default navigation template")
     return [dict(item) for item in DEFAULT_NAVIGATION]
+
+
+def _resolve_course_image_file(course_dir: Path, meta: Dict[str, Any]) -> Optional[Path]:
+    """
+    Find the exported course image file if present.
+    """
+    candidates: List[str] = []
+    rel_path = meta.get("course_image_export_path")
+    if isinstance(rel_path, str) and rel_path.strip():
+        candidates.append(rel_path.strip())
+
+    for key in ("course_image_filename", "course_image_display_name"):
+        name = meta.get(key)
+        if isinstance(name, str) and name.strip():
+            candidates.append(name.strip())
+
+    seen: set[str] = set()
+    for name in candidates:
+        safe_name = Path(name).name
+        if not safe_name or safe_name in seen:
+            continue
+        seen.add(safe_name)
+        candidate = course_dir / safe_name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _upload_course_image(
+    *,
+    canvas,
+    target_course_id: int,
+    file_path: Path,
+    logger,
+) -> int:
+    """
+    Upload the course card image file and return the new Canvas file id.
+    """
+    folder_path = f"{target_course_id}/course_image"
+    new_id = _upload_one(
+        canvas=canvas,
+        course_id=target_course_id,
+        file_path=file_path,
+        folder_path=folder_path,
+        on_duplicate="overwrite",
+        logger=logger,
+    )
+    return int(new_id)
 
 
 def _apply_course_navigation(
@@ -382,7 +431,7 @@ def import_course_settings(
             if meta.get(key) is not None:
                 course_fields[key] = meta[key]
 
-        # Rewrite course image using file id_map when available
+        # Rewrite course image using file id_map when available, otherwise fall back to uploaded export file
         files_map = _normalize_int_map((id_map or {}).get("files"))
         image_id = meta.get("image_id") or meta.get("image_id_str")
         try:
@@ -391,12 +440,19 @@ def import_course_settings(
             old_image_id = None
 
         image_filename = meta.get("course_image_filename") or meta.get("course_image_display_name")
+        image_file = _resolve_course_image_file(course_dir, meta)
+
+        def _record_file_mapping(old_id: Optional[int], new_id: int) -> None:
+            if old_id is None:
+                return
+            if isinstance(id_map, dict):
+                bucket = id_map.setdefault("files", {})
+                bucket[int(old_id)] = int(new_id)
 
         if old_image_id is not None:
             new_image_id = files_map.get(old_image_id)
             if new_image_id is not None:
                 course_fields["image_id"] = new_image_id
-                # Clear stale URL so Canvas rebuilds from new image
                 course_fields["image_url"] = None
                 lg.info(
                     "Remapped course image %s → %s (%s)",
@@ -404,12 +460,55 @@ def import_course_settings(
                     new_image_id,
                     image_filename or "unknown filename",
                 )
+            elif image_file is not None:
+                try:
+                    uploaded_id = _upload_course_image(
+                        canvas=canvas,
+                        target_course_id=target_course_id,
+                        file_path=image_file,
+                        logger=lg,
+                    )
+                except Exception as exc:
+                    lg.warning(
+                        "Failed to upload course image %s (%s): %s",
+                        image_file.name,
+                        image_filename or "unknown filename",
+                        exc,
+                    )
+                else:
+                    course_fields["image_id"] = uploaded_id
+                    course_fields["image_url"] = None
+                    _record_file_mapping(old_image_id, uploaded_id)
+                    lg.info(
+                        "Uploaded course image fallback for %s (%s) → %s",
+                        old_image_id,
+                        image_file.name,
+                        uploaded_id,
+                    )
             else:
                 lg.warning(
-                    "Course image %s (%s) not found in files id_map; leaving image unchanged",
+                    "Course image %s (%s) not found in files id_map and no exported image file present; leaving image unchanged",
                     old_image_id,
                     image_filename or "unknown filename",
                 )
+        elif image_file is not None:
+            try:
+                uploaded_id = _upload_course_image(
+                    canvas=canvas,
+                    target_course_id=target_course_id,
+                    file_path=image_file,
+                    logger=lg,
+                )
+            except Exception as exc:
+                lg.warning(
+                    "Failed to upload course image file %s: %s",
+                    image_file.name,
+                    exc,
+                )
+            else:
+                course_fields["image_id"] = uploaded_id
+                course_fields["image_url"] = None
+                lg.info("Uploaded course image %s → %s", image_file.name, uploaded_id)
 
     course_fields["sis_course_id"] = sis_course_id if sis_course_id is not None else ""
     course_fields["integration_id"] = integration_id if integration_id is not None else ""
