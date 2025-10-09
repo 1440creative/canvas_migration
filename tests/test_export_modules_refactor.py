@@ -26,7 +26,7 @@ def test_modules_backfill_pages(tmp_path: Path):
         m.get(f"https://canvas.test/api/v1/courses/{course_id}/modules",
               json=[{"id": 7, "name": "Week 1", "position": 1, "published": True}])
         m.get(f"https://canvas.test/api/v1/courses/{course_id}/modules/7/items",
-              json=[{"id": 301, "position": 1, "type": "Page", "title": "Welcome", "page_url": "welcome"}])
+              json=[{"id": 301, "position": 1, "type": "Page", "title": "Welcome", "page_url": "welcome", "indent": 2}])
 
         export_modules(course_id, root, api)
 
@@ -40,3 +40,7 @@ def test_modules_backfill_pages(tmp_path: Path):
     assert data["id"] == 1
     assert data["url"] == "welcome"
     assert data["html_path"].endswith("pages/001_welcome/index.html")
+
+    modules_path = root / "101/modules/modules.json"
+    modules = json.loads(modules_path.read_text(encoding="utf-8"))
+    assert modules[0]["items"][0]["indent"] == 2

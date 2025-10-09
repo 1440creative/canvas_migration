@@ -78,6 +78,13 @@ def export_modules(course_id: int, export_root: Path, api: CanvasAPI) -> List[Di
             if it.get("published") is not None:
                 item_meta["published"] = bool(it.get("published"))
 
+            indent = it.get("indent")
+            if indent is not None:
+                try:
+                    item_meta["indent"] = int(indent)
+                except (TypeError, ValueError):
+                    pass
+
             content_id = it.get("content_id")
             if content_id is not None:
                 item_meta["content_id"] = content_id

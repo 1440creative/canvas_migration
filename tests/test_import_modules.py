@@ -18,12 +18,12 @@ def test_import_modules_happy_path(tmp_path, requests_mock, monkeypatch):
             "name": "Week 1",
             "published": True,
             "items": [
-                {"type": "Page", "title": "Front Page", "page_url": "front-page", "published": True},
-                {"type": "Assignment", "title": "HW1", "content_id": 100, "published": True},
-                {"type": "Quiz", "title": "Quiz 1", "content_id": 300, "published": True},
-                {"type": "Discussion", "title": "Discuss 1", "content_id": 400, "published": True},
-                {"type": "SubHeader", "title": "Resources", "published": True},
-                {"type": "ExternalUrl", "title": "Syllabus PDF", "external_url": "https://example.org/syllabus.pdf"},
+                {"type": "Page", "title": "Front Page", "page_url": "front-page", "published": True, "indent": 2},
+                {"type": "Assignment", "title": "HW1", "content_id": 100, "published": True, "indent": 1},
+                {"type": "Quiz", "title": "Quiz 1", "content_id": 300, "published": True, "indent": 3},
+                {"type": "Discussion", "title": "Discuss 1", "content_id": 400, "published": True, "indent": 0},
+                {"type": "SubHeader", "title": "Resources", "published": True, "indent": 2},
+                {"type": "ExternalUrl", "title": "Syllabus PDF", "external_url": "https://example.org/syllabus.pdf", "indent": 99},
             ],
         }
     ]
@@ -74,31 +74,37 @@ def test_import_modules_happy_path(tmp_path, requests_mock, monkeypatch):
     assert j0["module_item"]["type"] == "Page"
     assert j0["module_item"]["page_url"] == "front-page"
     assert j0["module_item"]["position"] == 1
+    assert j0["module_item"]["indent"] == 2
     # Second is Assignment with mapped content_id
     j1 = reqs[1].json()
     assert j1["module_item"]["type"] == "Assignment"
     assert j1["module_item"]["content_id"] == 200
     assert j1["module_item"]["position"] == 2
+    assert j1["module_item"]["indent"] == 1
     # Third is Quiz with mapped content_id
     j2 = reqs[2].json()
     assert j2["module_item"]["type"] == "Quiz"
     assert j2["module_item"]["content_id"] == 600
     assert j2["module_item"]["position"] == 3
+    assert j2["module_item"]["indent"] == 3
     # Fourth is Discussion with mapped content_id
     j3 = reqs[3].json()
     assert j3["module_item"]["type"] == "Discussion"
     assert j3["module_item"]["content_id"] == 800
     assert j3["module_item"]["position"] == 4
+    assert "indent" not in j3["module_item"]
     # Fifth is SubHeader (title only)
     j4 = reqs[4].json()
     assert j4["module_item"]["type"] == "SubHeader"
     assert j4["module_item"]["title"] == "Resources"
     assert j4["module_item"]["position"] == 5
+    assert j4["module_item"]["indent"] == 2
     # Sixth (ExternalUrl) retains original URL
     j5 = reqs[5].json()
     assert j5["module_item"]["type"] == "ExternalUrl"
     assert j5["module_item"]["external_url"] == "https://example.org/syllabus.pdf"
     assert j5["module_item"]["position"] == 6
+    assert j5["module_item"]["indent"] == 16
 
 
 def test_import_modules_skips_when_mapping_missing(tmp_path, requests_mock):

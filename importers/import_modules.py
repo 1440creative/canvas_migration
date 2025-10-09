@@ -133,6 +133,28 @@ def _coerce_bool(value: Any) -> Optional[bool]:
     return bool(value)
 
 
+def _coerce_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalized_indent(value: Any) -> Optional[int]:
+    indent = _coerce_int(value)
+    if indent is None:
+        return None
+    if indent < 0:
+        return 0
+    if indent > 16:
+        return 16
+    return indent
+
+
 def _make_item_payload(
     item: Dict[str, Any],
     *,
@@ -147,6 +169,12 @@ def _make_item_payload(
     published = _coerce_bool(item.get("published"))
     if published is None:
         published = False
+    indent = _normalized_indent(item.get("indent"))
+
+    def _wrap(module_item: Dict[str, Any]) -> Tuple[dict, None]:
+        if indent and indent > 0:
+            module_item["indent"] = indent
+        return ({"module_item": module_item}, None)
 
     if t == "Page":
         src_slug = item.get("page_url")
@@ -155,15 +183,13 @@ def _make_item_payload(
         tgt_slug = id_map.get("pages_url", {}).get(src_slug)
         if not tgt_slug:
             return (None, "no pages_url mapping")
-        return ({
-            "module_item": {
-                "type": "Page",
-                "title": title,
-                "page_url": tgt_slug,
-                "published": published,
-                "position": position,
-            }
-        }, None)
+        return _wrap({
+            "type": "Page",
+            "title": title,
+            "page_url": tgt_slug,
+            "published": published,
+            "position": position,
+        })
 
     if t == "Assignment":
         src_id = item.get("content_id")
@@ -172,15 +198,13 @@ def _make_item_payload(
         new_id = id_map.get("assignments", {}).get(src_id)
         if not isinstance(new_id, int):
             return (None, "no assignment id mapping")
-        return ({
-            "module_item": {
-                "type": "Assignment",
-                "title": title,
-                "content_id": new_id,
-                "published": published,
-                "position": position,
-            }
-        }, None)
+        return _wrap({
+            "type": "Assignment",
+            "title": title,
+            "content_id": new_id,
+            "published": published,
+            "position": position,
+        })
 
     if t == "Quiz":
         src_id = item.get("content_id")
@@ -189,15 +213,13 @@ def _make_item_payload(
         new_id = id_map.get("quizzes", {}).get(src_id)
         if not isinstance(new_id, int):
             return (None, "no quiz id mapping")
-        return ({
-            "module_item": {
-                "type": "Quiz",
-                "title": title,
-                "content_id": new_id,
-                "published": published,
-                "position": position,
-            }
-        }, None)
+        return _wrap({
+            "type": "Quiz",
+            "title": title,
+            "content_id": new_id,
+            "published": published,
+            "position": position,
+        })
 
     if t in {"Discussion", "DiscussionTopic"}:
         src_id = item.get("content_id")
@@ -206,41 +228,35 @@ def _make_item_payload(
         new_id = id_map.get("discussions", {}).get(src_id)
         if not isinstance(new_id, int):
             return (None, "no discussion id mapping")
-        return ({
-            "module_item": {
-                "type": "Discussion",
-                "title": title,
-                "content_id": new_id,
-                "published": published,
-                "position": position,
-            }
-        }, None)
+        return _wrap({
+            "type": "Discussion",
+            "title": title,
+            "content_id": new_id,
+            "published": published,
+            "position": position,
+        })
 
     if t == "SubHeader":
         if not title:
             return (None, "missing title")
-        return ({
-            "module_item": {
-                "type": "SubHeader",
-                "title": title,
-                "published": published,
-                "position": position,
-            }
-        }, None)
+        return _wrap({
+            "type": "SubHeader",
+            "title": title,
+            "published": published,
+            "position": position,
+        })
 
     if t == "ExternalUrl":
         ext = item.get("external_url")
         if not ext:
             return (None, "missing external_url")
-        return ({
-            "module_item": {
-                "type": "ExternalUrl",
-                "title": title,
-                "external_url": ext,
-                "published": published,
-                "position": position,
-            }
-        }, None)
+        return _wrap({
+            "type": "ExternalUrl",
+            "title": title,
+            "external_url": ext,
+            "published": published,
+            "position": position,
+        })
 
     return (None, f"unsupported type {t!r}")
 

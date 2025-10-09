@@ -156,3 +156,84 @@ def test_assignment_online_quiz_skips(tmp_path, requests_mock):
 
     assert counters["skipped"] == 1
     assert len(requests_mock.request_history) == 0
+
+
+def test_import_assignments_maps_graded_discussion(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    a_dir = export_root / "assignments" / "wk8"
+    d_dir = export_root / "discussions" / "001_reflection"
+    a_dir.mkdir(parents=True)
+    d_dir.mkdir(parents=True)
+
+    assignment_meta = {
+        "id": 888,
+        "name": "Module 8 Reflection",
+        "submission_types": ["discussion_topic"],
+    }
+    (a_dir / "assignment_metadata.json").write_text(json.dumps(assignment_meta), encoding="utf-8")
+
+    discussion_meta = {
+        "id": 4444,
+        "assignment_id": 888,
+        "title": "Module 8 Reflection",
+    }
+    (d_dir / "discussion_metadata.json").write_text(json.dumps(discussion_meta), encoding="utf-8")
+
+    api_base = "https://api.example.edu"
+    create_url = f"{api_base}/api/v1/courses/555/assignments"
+    requests_mock.post(create_url, json={"id": 2222, "discussion_topic": {"id": 9999}})
+
+    canvas = DummyCanvas(api_base)
+    id_map = {}
+
+    importer.import_assignments(
+        target_course_id=555,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+    )
+
+    assert id_map["assignments"][888] == 2222
+    assert id_map["discussions"][4444] == 9999
+
+
+def test_import_assignments_discussion_mapping_fallback_get(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    a_dir = export_root / "assignments" / "wk9"
+    d_dir = export_root / "discussions" / "002_reflection"
+    a_dir.mkdir(parents=True)
+    d_dir.mkdir(parents=True)
+
+    assignment_meta = {
+        "id": 889,
+        "name": "Module 9 Reflection",
+        "submission_types": ["discussion_topic"],
+    }
+    (a_dir / "assignment_metadata.json").write_text(json.dumps(assignment_meta), encoding="utf-8")
+
+    discussion_meta = {
+        "id": 5555,
+        "assignment_id": 889,
+        "title": "Module 9 Reflection",
+    }
+    (d_dir / "discussion_metadata.json").write_text(json.dumps(discussion_meta), encoding="utf-8")
+
+    api_base = "https://api.example.edu"
+    create_url = f"{api_base}/api/v1/courses/556/assignments"
+    detail_url = f"{api_base}/api/v1/courses/556/assignments/3333"
+
+    requests_mock.post(create_url, json={"id": 3333}, status_code=200)
+    requests_mock.get(detail_url, json={"id": 3333, "discussion_topic": {"id": 12345}})
+
+    canvas = DummyCanvas(api_base)
+    id_map = {}
+
+    importer.import_assignments(
+        target_course_id=556,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+    )
+
+    assert id_map["assignments"][889] == 3333
+    assert id_map["discussions"][5555] == 12345
