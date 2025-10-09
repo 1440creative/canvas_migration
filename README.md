@@ -122,6 +122,8 @@ By default the importer clears SIS identifiers (sis_course_id, integration_id, s
 Course hero images are remapped automatically when the original image file was exported and imported—the importer uses `id_map.json` to swap the old image file id for the new one before issuing the final course settings update.
 so links to the source course (files, assignments, quizzes, discussions, modules, pages) are updated to the new target IDs using the generated `id_map.json`. No manual link cleanup is required as long as pages, assignments, files, quizzes, discussions, and modules are included in the import.
 
+When the source course relies on a custom grading scheme, create the matching scheme in the target account before importing and add its Canvas id to `id_map.json` under `grading_standards` (for example: `"grading_standards": {"17642": 90210}`). If no mapping exists the importer will create a course-scoped copy during the settings step.
+
 Quiz question payloads are now exported and imported by default. Use `--skip-questions` with `scripts/run_export.py` or `--skip-quiz-questions` with `scripts/run_import.py` if you need to opt out for troubleshooting.
 
 
