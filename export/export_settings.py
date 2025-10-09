@@ -60,22 +60,46 @@ def _fetch_grading_standard(
         except Exception:
             continue
 
+        fallback_item: Optional[Dict[str, Any]] = None
         if isinstance(data, list):
             for item in data:
                 if not isinstance(item, dict):
                     continue
+                if fallback_item is None:
+                    fallback_item = item
                 if str(item.get("id")) != sid:
                     continue
                 scheme = _sanitize_scheme_entries(item.get("grading_scheme"))
                 if not scheme:
                     continue
-                return {
+                result = {
                     "id": item.get("id"),
                     "title": item.get("title") or item.get("name"),
                     "context_type": item.get("context_type") or context_type.title(),
                     "context_id": item.get("context_id"),
                     "grading_scheme": scheme,
                 }
+                if str(item.get("id")) != sid:
+                    result["source_standard_id"] = sid
+                return result
+
+            if fallback_item and context_type == "course":
+                scheme = _sanitize_scheme_entries(fallback_item.get("grading_scheme"))
+                if scheme:
+                    result = {
+                        "id": fallback_item.get("id"),
+                        "title": fallback_item.get("title") or fallback_item.get("name"),
+                        "context_type": fallback_item.get("context_type") or context_type.title(),
+                        "context_id": fallback_item.get("context_id"),
+                        "grading_scheme": scheme,
+                        "source_standard_id": sid,
+                    }
+                    log.info(
+                        "grading standard %s not directly accessible; using course-scoped standard %s",
+                        sid,
+                        fallback_item.get("id"),
+                    )
+                    return result
 
         elif isinstance(data, dict):
             if str(data.get("id")) != sid and context_type != "unscoped":
@@ -83,13 +107,16 @@ def _fetch_grading_standard(
             scheme = _sanitize_scheme_entries(data.get("grading_scheme"))
             if not scheme:
                 continue
-            return {
+            result = {
                 "id": data.get("id"),
                 "title": data.get("title") or data.get("name"),
                 "context_type": data.get("context_type") or context_type.title(),
                 "context_id": data.get("context_id"),
                 "grading_scheme": scheme,
             }
+            if str(data.get("id")) != sid:
+                result["source_standard_id"] = sid
+            return result
 
     log.warning("Unable to fetch grading standard %s", standard_id)
     return None
