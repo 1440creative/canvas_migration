@@ -443,3 +443,50 @@ def test_override_sis_fields(tmp_path, requests_mock):
     assert course_payload["sis_course_id"] == "NEW-SIS"
     assert course_payload["integration_id"] == "integration-123"
     assert course_payload["sis_import_id"] == "import-456"
+
+
+def test_applies_course_navigation(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    nav = [
+        {"id": "modules", "position": 4, "hidden": False},
+        {"id": "assignments", "position": 2, "hidden": True},
+    ]
+    _write(course_dir / "course_navigation.json", json.dumps(nav))
+    _write(course_dir / "course_metadata.json", json.dumps({"name": "Nav Test"}))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    course_url = f"{api_base}/api/v1/courses/222"
+    requests_mock.put(course_url, json={"ok": True}, status_code=200)
+
+    tab_modules = requests_mock.put(
+        f"{api_base}/api/v1/courses/222/tabs/modules",
+        json={"id": "modules"},
+        status_code=200,
+    )
+    tab_assignments = requests_mock.put(
+        f"{api_base}/api/v1/courses/222/tabs/assignments",
+        json={"id": "assignments"},
+        status_code=200,
+    )
+
+    counts = import_course_settings(
+        target_course_id=222,
+        export_root=export_root,
+        canvas=canvas,
+        auto_set_term=False,
+        force_course_dates=False,
+    )
+
+    assert tab_modules.called
+    assert tab_assignments.called
+    mod_payload = tab_modules.last_request.json()
+    asn_payload = tab_assignments.last_request.json()
+    assert asn_payload["position"] == 1
+    assert asn_payload.get("hidden") is True
+    assert mod_payload["position"] == 2
+    assert mod_payload.get("hidden") is False
+    assert counts["updated"] >= 3  # course PUT + two tab updates

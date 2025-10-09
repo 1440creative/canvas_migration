@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
 import requests
 from logging_setup import get_logger
@@ -12,6 +12,26 @@ log = get_logger(artifact="course_settings", course_id="-")
 
 
 _TERM_CACHE: Dict[Tuple[int, str], Optional[int]] = {}
+
+DEFAULT_NAVIGATION: List[Dict[str, Any]] = [
+    {"id": "home", "hidden": False},
+    {"id": "modules", "hidden": False},
+    {"id": "assignments", "hidden": False},
+    {"id": "quizzes", "hidden": False},
+    {"id": "discussions", "hidden": False},
+    {"id": "announcements", "hidden": False},
+    {"id": "grades", "hidden": False},
+    {"id": "people", "hidden": False},
+    {"id": "pages", "hidden": True},
+    {"id": "files", "hidden": True},
+    {"id": "syllabus", "hidden": True},
+    {"id": "outcomes", "hidden": True},
+    {"id": "collaborations", "hidden": True},
+    {"id": "conferences", "hidden": True},
+    {"id": "attendance", "hidden": True},
+    {"id": "settings", "hidden": False},
+]
+_NAV_PROTECTED_IDS = {"settings"}
 
 
 def _detect_weighted_assignment_groups(export_root: Path) -> Optional[bool]:
@@ -108,6 +128,15 @@ def _read_json(p: Path) -> dict:
     except Exception:
         return {}
 
+def _read_json_list(p: Path) -> list:
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+    except Exception:
+        return []
+    return []
+
 
 def _api_base(canvas) -> str:
     """
@@ -139,6 +168,93 @@ def _normalize_int_map(raw: Optional[Dict[Any, Any]]) -> Dict[int, int]:
         normalized[old_id] = new_id
     return normalized
 
+def _load_navigation_spec(course_dir: Path, lg) -> List[Dict[str, Any]]:
+    nav_path = course_dir / "course_navigation.json"
+    nav_items = _read_json_list(nav_path) if nav_path.exists() else []
+    if nav_items:
+        return [item for item in nav_items if isinstance(item, dict) and item.get("id")]
+    lg.debug("course_navigation.json missing; using default navigation template")
+    return [dict(item) for item in DEFAULT_NAVIGATION]
+
+
+def _apply_course_navigation(
+    *,
+    session: requests.Session,
+    base: str,
+    target_course_id: int,
+    nav_items: List[Dict[str, Any]],
+    log,
+    counts: Dict[str, int],
+) -> None:
+    ordered: List[Dict[str, Any]] = []
+    for item in nav_items:
+        if not isinstance(item, dict):
+            continue
+        tab_id = item.get("id")
+        if not tab_id:
+            continue
+        tab_id_str = str(tab_id)
+        hidden = item.get("hidden")
+        position = item.get("position")
+        can_add = item.get("can_add_to_nav")
+        has_permission = item.get("has_permission")
+
+        if has_permission is False:
+            log.debug("Skipping navigation tab %s (no permission)", tab_id_str)
+            continue
+        if can_add is False:
+            log.debug("Skipping navigation tab %s (cannot add to nav)", tab_id_str)
+            continue
+
+        ordered.append(
+            {
+                "id": tab_id_str,
+                "hidden": hidden,
+                "position": position,
+            }
+        )
+
+    if not ordered:
+        log.debug("No navigation entries to apply")
+        return
+
+    # Preserve incoming order; fall back to exported positions if they are numeric
+    ordered.sort(key=lambda entry: (
+        0 if isinstance(entry.get("position"), (int, float)) else 1,
+        entry.get("position") or 0,
+    ))
+
+    for idx, entry in enumerate(ordered, start=1):
+        tab_id = entry["id"]
+        if tab_id in _NAV_PROTECTED_IDS:
+            log.debug("Skipping protected navigation tab %s", tab_id)
+            continue
+        payload: Dict[str, Any] = {"position": idx}
+        hidden_val = entry.get("hidden")
+        if hidden_val is not None:
+            payload["hidden"] = bool(hidden_val)
+
+        url = _full_url(base, f"/v1/courses/{target_course_id}/tabs/{tab_id}")
+        response = None
+        try:
+            response = session.put(url, json=payload)
+            response.raise_for_status()
+            counts["updated"] += 1
+            log.debug(
+                "Updated navigation tab %s", tab_id,
+                extra={"position": idx, "hidden": payload.get("hidden")},
+            )
+        except Exception as exc:
+            log.warning(
+                "Failed to update navigation tab %s",
+                tab_id,
+                extra={
+                    "position": idx,
+                    "hidden": payload.get("hidden"),
+                    "status": getattr(response, "status_code", None),
+                    "error": str(exc),
+                },
+            )
 
 def _fetch_json(session: requests.Session, base: str, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     url = _full_url(base, endpoint)
@@ -401,6 +517,20 @@ def import_course_settings(
                     lg.warning("Failed to set default_view=%s: %s", default_view, e)
         except Exception as e:
             lg.warning("Failed to import home.json: %s", e)
+
+    # --- 3b) course navigation ordering + visibility
+    try:
+        nav_items = _load_navigation_spec(course_dir, lg)
+        _apply_course_navigation(
+            session=canvas.session,
+            base=base,
+            target_course_id=target_course_id,
+            nav_items=nav_items,
+            log=lg,
+            counts=counts,
+        )
+    except Exception as exc:
+        lg.warning("Failed to apply course navigation settings: %s", exc)
 
     if course_fields.get("apply_assignment_group_weights") or _detect_weighted_assignment_groups(export_root):
         try:

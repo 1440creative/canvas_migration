@@ -74,6 +74,48 @@ def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) ->
     metadata["settings"] = settings
     atomic_write(out_dir / "course_metadata.json", json_dumps_stable(metadata))
     atomic_write(out_dir / "course_settings.json", json_dumps_stable(settings))
+
+    # Course navigation ordering + visibility
+    try:
+        tabs = api.get(f"courses/{course_id}/tabs")
+    except Exception as exc:
+        log.warning("Failed to export course navigation tabs: %s", exc)
+        tabs = []
+
+    navigation: list[dict[str, Any]] = []
+    if isinstance(tabs, list):
+        for tab in tabs:
+            if not isinstance(tab, dict):
+                continue
+            tab_id = tab.get("id")
+            if not tab_id:
+                continue
+            navigation.append(
+                {
+                    "id": tab_id,
+                    "label": tab.get("label"),
+                    "hidden": bool(tab.get("hidden")),
+                    "position": tab.get("position"),
+                    "visibility": tab.get("visibility"),
+                    "type": tab.get("type"),
+                    "html_url": tab.get("html_url"),
+                    "has_permission": tab.get("has_permission"),
+                    "can_add_to_nav": tab.get("can_add_to_nav"),
+                    "course_navigation": tab.get("course_navigation"),
+                }
+            )
+
+    if navigation:
+        navigation_sorted = sorted(
+            navigation,
+            key=lambda item: (
+                1 if item.get("position") in (None, "") else 0,
+                item.get("position") or 0,
+                str(item.get("id")),
+            ),
+        )
+        atomic_write(out_dir / "course_navigation.json", json_dumps_stable(navigation_sorted))
+        log.debug("exported %s course navigation tabs", len(navigation_sorted))
     
     #syllabus html
     try:
