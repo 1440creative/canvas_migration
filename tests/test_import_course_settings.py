@@ -572,3 +572,101 @@ def test_uploads_course_image_without_original_id(tmp_path, requests_mock):
     assert payload["image_id"] == 777
     assert payload["image_url"] is None
     assert counts["updated"] >= 1
+
+
+def test_maps_grading_standard_with_id_map(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+    course_dir.mkdir(parents=True, exist_ok=True)
+
+    meta = {
+        "name": "Course With Scheme",
+        "grading_standard_enabled": True,
+        "grading_standard_id": 5017,
+        "settings": {"grading_standard_enabled": True, "grading_standard_id": 5017},
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    course_url = f"{api_base}/api/v1/courses/222"
+    put_course = requests_mock.put(course_url, json={"ok": True}, status_code=200)
+    put_settings = requests_mock.put(f"{course_url}/settings", json={"ok": True}, status_code=200)
+
+    id_map = {"grading_standards": {5017: 9009}}
+
+    counts = import_course_settings(
+        target_course_id=222,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+        auto_set_term=False,
+        force_course_dates=False,
+    )
+
+    assert put_course.called
+    assert put_settings.called
+    payload = put_course.last_request.json()["course"]
+    assert payload["grading_standard_id"] == 9009
+    assert payload["grading_standard_enabled"] is True
+    settings_payload = put_settings.last_request.json()
+    assert settings_payload["grading_standard_id"] == 9009
+    assert settings_payload["grading_standard_enabled"] is True
+    assert counts["updated"] >= 2
+
+
+def test_creates_grading_standard_when_missing_map(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+    course_dir.mkdir(parents=True, exist_ok=True)
+
+    grading_standard = {
+        "id": 5017,
+        "title": "Imported Scheme",
+        "grading_scheme": [
+            {"name": "A", "value": 0.9},
+            {"name": "B", "value": 0.8},
+        ],
+    }
+    meta = {
+        "name": "Course With Scheme",
+        "grading_standard_enabled": True,
+        "grading_standard_id": 5017,
+        "grading_standard": grading_standard,
+        "settings": {"grading_standard_enabled": True, "grading_standard_id": 5017},
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    course_url = f"{api_base}/api/v1/courses/222"
+    put_course = requests_mock.put(course_url, json={"ok": True}, status_code=200)
+    put_settings = requests_mock.put(f"{course_url}/settings", json={"ok": True}, status_code=200)
+
+    post_standard = requests_mock.post(
+        f"{api_base}/api/v1/courses/222/grading_standards",
+        json={"id": 7777},
+        status_code=200,
+    )
+
+    id_map: Dict[str, Dict[Any, Any]] = {}
+
+    import_course_settings(
+        target_course_id=222,
+        export_root=export_root,
+        canvas=canvas,
+        id_map=id_map,
+        auto_set_term=False,
+        force_course_dates=False,
+    )
+
+    assert post_standard.called
+    payload = post_standard.last_request.json()["grading_standard"]
+    assert payload["title"] == "Imported Scheme"
+    assert payload["grading_scheme"][0]["value"] == 0.9
+    course_payload = put_course.last_request.json()["course"]
+    assert course_payload["grading_standard_id"] == 7777
+    assert course_payload["grading_standard_enabled"] is True
+    assert id_map["grading_standards"]["5017"] == 7777

@@ -34,14 +34,36 @@ def test_export_course_settings(tmp_path: Path):
             "https://canvas.test/api/v1/files/4321",
             json={"filename": "course-card.png", "display_name": "Course Card"},
         )
-        m.get(f"https://canvas.test/api/v1/courses/{course_id}/settings",
-              json={"allow_student_forum_attachments": True, "blueprint": False})
+        m.get(
+            f"https://canvas.test/api/v1/courses/{course_id}/settings",
+            json={
+                "allow_student_forum_attachments": True,
+                "blueprint": False,
+                "grading_standard_enabled": True,
+                "grading_standard_id": 5017,
+            },
+        )
         m.get(
             f"https://canvas.test/api/v1/courses/{course_id}/tabs",
             json=[
                 {"id": "home", "label": "Home", "position": 1, "hidden": False},
                 {"id": "modules", "label": "Modules", "position": 3, "hidden": True},
                 {"id": "assignments", "label": "Assignments", "position": 2, "hidden": False},
+            ],
+        )
+        m.get(
+            f"https://canvas.test/api/v1/courses/{course_id}/grading_standards",
+            json=[
+                {
+                    "id": 5017,
+                    "title": "Sample Scheme",
+                    "context_type": "Course",
+                    "context_id": course_id,
+                    "grading_scheme": [
+                        {"name": "A", "value": 0.9},
+                        {"name": "B", "value": 0.8},
+                    ],
+                }
             ],
         )
         m.get(
@@ -61,6 +83,10 @@ def test_export_course_settings(tmp_path: Path):
     assert md["course_image_filename"] == "course-card.png"
     assert md["course_image_display_name"] == "Course Card"
     assert md["apply_assignment_group_weights"] is True
+    assert md["grading_standard_id"] == 5017
+    assert md["grading_standard_enabled"] is True
+    assert md["grading_standard"]["title"] == "Sample Scheme"
+    assert md["grading_standard"]["grading_scheme"][0]["value"] == 0.9
     assert st["allow_student_forum_attachments"] is True
     assert [item["id"] for item in nav] == ["home", "assignments", "modules"]
     assert nav[1]["position"] == 2

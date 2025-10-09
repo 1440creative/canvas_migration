@@ -226,6 +226,68 @@ def _upload_course_image(
     return int(new_id)
 
 
+def _create_course_grading_standard(
+    *,
+    canvas,
+    base: str,
+    target_course_id: int,
+    standard: Dict[str, Any],
+    log,
+) -> int:
+    title = standard.get("title") or standard.get("name") or "Imported grading scheme"
+    entries_raw = standard.get("grading_scheme")
+    entries: List[Dict[str, Any]] = []
+    if isinstance(entries_raw, list):
+        for entry in entries_raw:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            value = entry.get("value")
+            if not isinstance(name, str):
+                continue
+            try:
+                value_f = float(value)
+            except (TypeError, ValueError):
+                continue
+            entries.append({"name": name, "value": value_f})
+
+    if not entries:
+        raise ValueError("grading scheme entries missing")
+
+    payload = {
+        "grading_standard": {
+            "title": title,
+            "grading_scheme": entries,
+        }
+    }
+
+    url = _full_url(base, f"/v1/courses/{target_course_id}/grading_standards")
+    response = canvas.session.post(url, json=payload)
+    response.raise_for_status()
+    try:
+        data = response.json()
+    except Exception:
+        data = {}
+
+    candidates = []
+    if isinstance(data, dict):
+        candidates.extend([
+            data.get("id"),
+            data.get("grading_standard_id"),
+            data.get("grading_standard", {}).get("id") if isinstance(data.get("grading_standard"), dict) else None,
+        ])
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        try:
+            return int(candidate)
+        except (TypeError, ValueError):
+            continue
+
+    raise RuntimeError("Canvas grading standard creation did not return an id")
+
+
 def _apply_course_navigation(
     *,
     session: requests.Session,
@@ -431,6 +493,68 @@ def import_course_settings(
             if meta.get(key) is not None:
                 course_fields[key] = meta[key]
 
+        settings_data = meta.get("settings") if isinstance(meta.get("settings"), dict) else None
+
+        grading_standard_enabled_raw = meta.get("grading_standard_enabled")
+        if grading_standard_enabled_raw is None and settings_data is not None:
+            grading_standard_enabled_raw = settings_data.get("grading_standard_enabled")
+        grading_standard_enabled = bool(grading_standard_enabled_raw)
+
+        old_grading_standard_id = meta.get("grading_standard_id")
+        if old_grading_standard_id is None and settings_data is not None:
+            old_grading_standard_id = settings_data.get("grading_standard_id")
+
+        old_grading_standard_id_int: Optional[int]
+        try:
+            old_grading_standard_id_int = int(old_grading_standard_id) if old_grading_standard_id is not None else None
+        except (TypeError, ValueError):
+            old_grading_standard_id_int = None
+
+        grading_standard_spec = meta.get("grading_standard") if isinstance(meta.get("grading_standard"), dict) else None
+
+        new_grading_standard_id: Optional[int] = None
+        if grading_standard_enabled:
+            grading_map = _normalize_int_map((id_map or {}).get("grading_standards"))
+            if old_grading_standard_id_int is not None:
+                new_grading_standard_id = grading_map.get(old_grading_standard_id_int)
+
+            if new_grading_standard_id is None and grading_standard_spec is not None:
+                try:
+                    new_grading_standard_id = _create_course_grading_standard(
+                        canvas=canvas,
+                        base=base,
+                        target_course_id=target_course_id,
+                        standard=grading_standard_spec,
+                        log=lg,
+                    )
+                    lg.info(
+                        "Created course grading standard %s",
+                        grading_standard_spec.get("title") or grading_standard_spec.get("name"),
+                    )
+                    if isinstance(id_map, dict) and old_grading_standard_id_int is not None:
+                        bucket = id_map.setdefault("grading_standards", {})
+                        bucket[str(old_grading_standard_id_int)] = new_grading_standard_id
+                except Exception as exc:
+                    lg.warning(
+                        "Failed to create grading standard %s: %s",
+                        grading_standard_spec.get("title") or grading_standard_spec.get("name") or old_grading_standard_id,
+                        exc,
+                    )
+
+            if new_grading_standard_id is not None:
+                course_fields["grading_standard_id"] = int(new_grading_standard_id)
+                course_fields["grading_standard_enabled"] = True
+                if settings_data is not None:
+                    settings_data["grading_standard_id"] = int(new_grading_standard_id)
+                    settings_data["grading_standard_enabled"] = True
+                meta["grading_standard_id"] = int(new_grading_standard_id)
+                meta["grading_standard_enabled"] = True
+            elif grading_standard_enabled:
+                lg.warning(
+                    "Grading standard %s could not be mapped or created; course will use default scheme",
+                    old_grading_standard_id,
+                )
+
         # Rewrite course image using file id_map when available, otherwise fall back to uploaded export file
         files_map = _normalize_int_map((id_map or {}).get("files"))
         image_id = meta.get("image_id") or meta.get("image_id_str")
@@ -560,7 +684,7 @@ def import_course_settings(
         counts["updated"] += 1
 
     # PUT /courses/:id/settings if present
-    settings = meta.get("settings")
+    settings = meta.get("settings") if isinstance(meta.get("settings"), dict) else None
     if isinstance(settings, dict) and settings:
         url = _full_url(base, f"/v1/courses/{target_course_id}/settings")
         lg.debug("PUT /courses/%s/settings", target_course_id)

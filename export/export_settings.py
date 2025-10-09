@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from urllib.parse import urlparse
 
 from logging_setup import get_logger
@@ -12,6 +12,87 @@ from utils.fs import ensure_dir, atomic_write, json_dumps_stable
 from .export_syllabus import export_syllabus as export_course_syllabus
 
 _IMAGE_CHUNK = 1024 * 512  # 512 KiB
+
+
+def _sanitize_scheme_entries(raw: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    scheme: List[Dict[str, Any]] = []
+    if not isinstance(raw, list):
+        return scheme
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        value = entry.get("value")
+        if not isinstance(name, str):
+            continue
+        try:
+            value_f = float(value)
+        except (TypeError, ValueError):
+            continue
+        scheme.append({"name": name, "value": value_f})
+    return scheme
+
+
+def _fetch_grading_standard(
+    *,
+    api: CanvasAPI,
+    course_id: int,
+    account_id: Optional[int],
+    standard_id: Any,
+    log,
+) -> Optional[Dict[str, Any]]:
+    """Fetch grading standard definition from Canvas."""
+
+    if standard_id is None:
+        return None
+
+    sid = str(standard_id)
+    contexts: List[tuple[str, str]] = [
+        ("course", f"courses/{course_id}/grading_standards"),
+    ]
+    if account_id is not None:
+        contexts.append(("account", f"accounts/{account_id}/grading_standards"))
+    contexts.append(("unscoped", f"grading_standards/{sid}"))
+
+    for context_type, endpoint in contexts:
+        try:
+            data = api.get(endpoint)
+        except Exception:
+            continue
+
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                if str(item.get("id")) != sid:
+                    continue
+                scheme = _sanitize_scheme_entries(item.get("grading_scheme"))
+                if not scheme:
+                    continue
+                return {
+                    "id": item.get("id"),
+                    "title": item.get("title") or item.get("name"),
+                    "context_type": item.get("context_type") or context_type.title(),
+                    "context_id": item.get("context_id"),
+                    "grading_scheme": scheme,
+                }
+
+        elif isinstance(data, dict):
+            if str(data.get("id")) != sid and context_type != "unscoped":
+                continue
+            scheme = _sanitize_scheme_entries(data.get("grading_scheme"))
+            if not scheme:
+                continue
+            return {
+                "id": data.get("id"),
+                "title": data.get("title") or data.get("name"),
+                "context_type": data.get("context_type") or context_type.title(),
+                "context_id": data.get("context_id"),
+                "grading_scheme": scheme,
+            }
+
+    log.warning("Unable to fetch grading standard %s", standard_id)
+    return None
 
 
 def _safe_name(candidate: str) -> str:
@@ -103,6 +184,7 @@ def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) ->
         "start_at": course.get("start_at"),
         "end_at": course.get("end_at"),
         "apply_assignment_group_weights": course.get("apply_assignment_group_weights"),
+        "grading_standard_id": course.get("grading_standard_id"),
         "is_blueprint": bool(course.get("blueprint") or course.get("is_blueprint")),
         "default_view": course.get("default_view"),
         "time_zone": course.get("time_zone"),
@@ -135,6 +217,24 @@ def export_course_settings(course_id: int, export_root: Path, api: CanvasAPI) ->
         raise TypeError("Expected settings dict from Canvas API")
 
     metadata["settings"] = settings
+
+    if isinstance(settings, dict):
+        if "grading_standard_enabled" in settings:
+            metadata["grading_standard_enabled"] = bool(settings.get("grading_standard_enabled"))
+        if settings.get("grading_standard_id") and not metadata.get("grading_standard_id"):
+            metadata["grading_standard_id"] = settings.get("grading_standard_id")
+
+    grading_standard_info = None
+    if metadata.get("grading_standard_enabled") and metadata.get("grading_standard_id"):
+        grading_standard_info = _fetch_grading_standard(
+            api=api,
+            course_id=course_id,
+            account_id=metadata.get("account_id"),
+            standard_id=metadata.get("grading_standard_id"),
+            log=log,
+        )
+        if grading_standard_info:
+            metadata["grading_standard"] = grading_standard_info
 
     image_url = metadata.get("image_url")
     if image_url:
