@@ -150,7 +150,7 @@ def import_course(
     continue_on_error: bool = True,
     auto_term_name: Optional[str] = "Default",
     auto_term_id: Optional[int] = None,
-    force_course_dates: bool = True,
+    participation_mode: str = "course",
     sis_course_id: Optional[str] = None,
     integration_id: Optional[str] = None,
     sis_import_id: Optional[str] = None,
@@ -240,14 +240,14 @@ def import_course(
 
             elif step == "course":
                 import_course_settings(
-                    target_course_id=target_course_id, 
-                    export_root=export_root, 
+                    target_course_id=target_course_id,
+                    export_root=export_root,
                     canvas=canvas,
                     id_map=id_map,
                     auto_set_term=bool(auto_term_name),
                     term_name=auto_term_name or "",
                     term_id=auto_term_id,
-                    force_course_dates=force_course_dates,
+                    participation_mode=participation_mode,
                     sis_course_id=sis_course_id,
                     integration_id=integration_id,
                     sis_import_id=sis_import_id,

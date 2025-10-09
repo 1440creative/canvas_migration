@@ -115,7 +115,7 @@ Re-run the script after any new importer step that updates `id_map.json` so down
 
 When targeting a course that lives under a non-default account (or when the existing course metadata is incomplete), pass `--target-account-id` so the importer can resolve enrollment terms and settings against the correct Canvas account. If you omit `--target-course-id` the script will automatically create a new Canvas course under the supplied account using the exported course metadata to seed the name, then continue with the import steps.
 
-By default the importer also assigns the target course to the 'Default' enrollment term and sets participation to Course (restricts enrollments to course dates). Use `--term-name`, `--term-id`, `--no-auto-term`, or `--no-course-dates` when running `scripts/run_import.py` if you need different behaviour.
+By default the importer also assigns the target course to the 'Default' enrollment term and sets participation to Course (restricts enrollments to course dates). Use `--term-name`, `--term-id`, `--no-auto-term`, or `--participation term|inherit` when running `scripts/run_import.py` if you need different behaviour (`--no-course-dates` remains as a shorthand for `--participation term`).
 
 By default the importer clears SIS identifiers (sis_course_id, integration_id, sis_import_id). You can set new values with `--sis-course-id`, `--integration-id`, or `--sis-import-id` when running `scripts/run_import.py`.
 

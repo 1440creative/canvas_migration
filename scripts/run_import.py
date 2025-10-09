@@ -126,8 +126,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Explicit enrollment term ID to assign (overrides --term-name lookup).")
     ap.add_argument("--no-auto-term", action="store_true",
                     help="Disable automatic enrollment term reassignment.")
-    ap.add_argument("--no-course-dates", action="store_true",
-                    help="Do not force participation to 'Course' (restrict_enrollments_to_course_dates=false).")
+    ap.add_argument(
+        "--participation",
+        choices=["course", "term", "inherit"],
+        default="course",
+        help="Set course participation handling: 'course' restricts to course dates (default), 'term' defers to term dates, 'inherit' uses the export value.",
+    )
+    ap.add_argument(
+        "--no-course-dates",
+        action="store_true",
+        help="Alias for --participation term (kept for backwards compatibility).",
+    )
     ap.add_argument(
         "--target-account-id",
         type=int,
@@ -148,6 +157,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = ap.parse_args(argv)
 
     setup_logging(verbosity=args.verbose or 1)
+
+    participation_mode = args.participation
+    if args.no_course_dates:
+        if participation_mode != "term" and (args.verbose or 0) >= 1:
+            print("INFO: --no-course-dates overrides participation to 'term'.")
+        participation_mode = "term"
 
     export_root: Path = args.export_root
     steps = _parse_steps(args.steps)
@@ -210,7 +225,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         continue_on_error=True,
         auto_term_name=None if args.no_auto_term or not args.term_name else args.term_name,
         auto_term_id=args.term_id,
-        force_course_dates=not args.no_course_dates,
+        participation_mode=participation_mode,
         sis_course_id=args.sis_course_id,
         integration_id=args.integration_id,
         sis_import_id=args.sis_import_id,

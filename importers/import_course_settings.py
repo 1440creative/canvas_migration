@@ -428,7 +428,7 @@ def import_course_settings(
     auto_set_term: bool = True,
     term_name: str = "Default",
     term_id: Optional[int] = None,
-    force_course_dates: bool = True,
+    participation_mode: str = "course",
     sis_course_id: Optional[str] = None,
     integration_id: Optional[str] = None,
     sis_import_id: Optional[str] = None,
@@ -456,11 +456,16 @@ def import_course_settings(
     counts = {"updated": 0}
     course_dir = export_root / "course"
 
+    participation_mode_normalized = (participation_mode or "course").strip().lower()
+    if participation_mode_normalized not in {"course", "term", "inherit"}:
+        raise ValueError(f"Unsupported participation_mode: {participation_mode}")
+
     # --- 1) course metadata -> two endpoints
     meta_path = course_dir / "course_metadata.json"
     meta = _read_json(meta_path) if meta_path.exists() else {}
 
     course_fields: Dict[str, Any] = {}
+    settings_data: Optional[Dict[str, Any]] = None
 
     if meta:
         # Fields accepted by /courses/:id
@@ -634,6 +639,53 @@ def import_course_settings(
                 course_fields["image_url"] = None
                 lg.info("Uploaded course image %s → %s", image_file.name, uploaded_id)
 
+        meta_restrict = meta.get("restrict_enrollments_to_course_dates")
+        if meta_restrict is None and settings_data is not None:
+            meta_restrict = settings_data.get("restrict_enrollments_to_course_dates")
+
+        original_future = settings_data.get("restrict_student_future_view") if settings_data else None
+        original_past = settings_data.get("restrict_student_past_view") if settings_data else None
+        if original_future is None:
+            original_future = meta.get("restrict_student_future_view")
+        if original_past is None:
+            original_past = meta.get("restrict_student_past_view")
+
+        def _ensure_settings_dict() -> Dict[str, Any]:
+            nonlocal settings_data
+            if settings_data is None:
+                settings_data = {}
+            return settings_data
+
+        def _set_setting_flag(key: str, value: Any) -> None:
+            data = _ensure_settings_dict()
+            data[key] = value
+
+        if participation_mode_normalized == "course":
+            course_fields["restrict_enrollments_to_course_dates"] = True
+            _set_setting_flag("restrict_enrollments_to_course_dates", True)
+            _set_setting_flag(
+                "restrict_student_future_view",
+                bool(original_future) if original_future is not None else True,
+            )
+            _set_setting_flag(
+                "restrict_student_past_view",
+                bool(original_past) if original_past is not None else True,
+            )
+        elif participation_mode_normalized == "term":
+            course_fields["restrict_enrollments_to_course_dates"] = False
+            _set_setting_flag("restrict_enrollments_to_course_dates", False)
+            _set_setting_flag("restrict_student_future_view", False)
+            _set_setting_flag("restrict_student_past_view", False)
+        else:  # inherit
+            if meta_restrict is not None:
+                restrict_val = bool(meta_restrict)
+                course_fields["restrict_enrollments_to_course_dates"] = restrict_val
+                _set_setting_flag("restrict_enrollments_to_course_dates", restrict_val)
+            if original_future is not None:
+                _set_setting_flag("restrict_student_future_view", bool(original_future))
+            if original_past is not None:
+                _set_setting_flag("restrict_student_past_view", bool(original_past))
+
     course_fields["sis_course_id"] = sis_course_id if sis_course_id is not None else ""
     course_fields["integration_id"] = integration_id if integration_id is not None else ""
     course_fields["sis_import_id"] = sis_import_id if sis_import_id is not None else ""
@@ -672,9 +724,6 @@ def import_course_settings(
         if resolved_term_id is not None:
             course_fields["enrollment_term_id"] = int(resolved_term_id)
 
-    if force_course_dates:
-        course_fields["restrict_enrollments_to_course_dates"] = True
-
     # PUT /courses/:id (hit the mocked URL)
     if course_fields:
         url = _full_url(base, f"/v1/courses/{target_course_id}")
@@ -684,7 +733,7 @@ def import_course_settings(
         counts["updated"] += 1
 
     # PUT /courses/:id/settings if present
-    settings = meta.get("settings") if isinstance(meta.get("settings"), dict) else None
+    settings = settings_data if isinstance(settings_data, dict) else None
     if isinstance(settings, dict) and settings:
         url = _full_url(base, f"/v1/courses/{target_course_id}/settings")
         lg.debug("PUT /courses/%s/settings", target_course_id)

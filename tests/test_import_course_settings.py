@@ -39,7 +39,7 @@ def test_puts_course_fields_and_settings(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     assert counts["updated"] >= 2
@@ -71,7 +71,7 @@ def test_puts_syllabus_html(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     assert counts["updated"] >= 1
@@ -102,7 +102,7 @@ def test_sets_default_view_and_front_page(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     # Expect two updates (default_view + front_page)
@@ -135,7 +135,7 @@ def test_sets_apply_assignment_group_weights(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     payload = requests_mock.request_history[0].json()["course"]
@@ -176,7 +176,7 @@ def test_infers_assignment_group_weights(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     payload = requests_mock.request_history[0].json()["course"]
@@ -218,7 +218,7 @@ def test_reapplies_assignment_group_weights(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
         id_map=id_map,
     )
 
@@ -263,7 +263,7 @@ def test_reapplies_assignment_group_weights_logs_http_error(tmp_path, requests_m
             export_root=export_root,
             canvas=canvas,
             auto_set_term=False,
-            force_course_dates=False,
+            participation_mode="inherit",
             id_map=id_map,
         )
 
@@ -291,7 +291,7 @@ def test_blueprint_sync_optional(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
         queue_blueprint_sync=True,
         blueprint_sync_options={"copy_settings": True, "publish_after_migration": True},
     )
@@ -332,7 +332,7 @@ def test_target_account_id_overrides_course_lookup(tmp_path, requests_mock):
         canvas=canvas,
         target_account_id=54,
         term_name="Default",
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     assert counts["updated"] >= 1
@@ -365,7 +365,7 @@ def test_maps_course_image_with_id_map(tmp_path, requests_mock):
         canvas=canvas,
         id_map={"files": {111: 999}},
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     assert counts["updated"] >= 1
@@ -400,6 +400,9 @@ def test_auto_term_and_course_participation(tmp_path, requests_mock):
     put_course = requests_mock.put(
         f"{api_base}/api/v1/courses/444", json={"ok": True}, status_code=200
     )
+    put_settings = requests_mock.put(
+        f"{api_base}/api/v1/courses/444/settings", json={"ok": True}, status_code=200
+    )
 
     import_course_settings(
         target_course_id=444,
@@ -412,6 +415,92 @@ def test_auto_term_and_course_participation(tmp_path, requests_mock):
     course_payload = body["course"]
     assert course_payload["enrollment_term_id"] == 314
     assert course_payload["restrict_enrollments_to_course_dates"] is True
+    settings_payload = put_settings.last_request.json()
+    assert settings_payload["restrict_enrollments_to_course_dates"] is True
+
+
+def test_participation_term_mode(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    meta = {
+        "name": "Participation Test",
+        "restrict_enrollments_to_course_dates": True,
+        "settings": {
+            "restrict_enrollments_to_course_dates": True,
+            "restrict_student_future_view": True,
+            "restrict_student_past_view": True,
+        },
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/555", json={"ok": True}, status_code=200
+    )
+    put_settings = requests_mock.put(
+        f"{api_base}/api/v1/courses/555/settings", json={"ok": True}, status_code=200
+    )
+
+    import_course_settings(
+        target_course_id=555,
+        export_root=export_root,
+        canvas=canvas,
+        auto_set_term=False,
+        participation_mode="term",
+    )
+
+    course_payload = put_course.last_request.json()["course"]
+    assert course_payload["restrict_enrollments_to_course_dates"] is False
+
+    settings_payload = put_settings.last_request.json()
+    assert settings_payload["restrict_enrollments_to_course_dates"] is False
+    assert settings_payload["restrict_student_future_view"] is False
+    assert settings_payload["restrict_student_past_view"] is False
+
+
+def test_participation_inherit_respects_export(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    meta = {
+        "name": "Inherited Participation",
+        "restrict_enrollments_to_course_dates": False,
+        "settings": {
+            "restrict_enrollments_to_course_dates": False,
+            "restrict_student_future_view": False,
+            "restrict_student_past_view": True,
+        },
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/556", json={"ok": True}, status_code=200
+    )
+    put_settings = requests_mock.put(
+        f"{api_base}/api/v1/courses/556/settings", json={"ok": True}, status_code=200
+    )
+
+    import_course_settings(
+        target_course_id=556,
+        export_root=export_root,
+        canvas=canvas,
+        auto_set_term=False,
+        participation_mode="inherit",
+    )
+
+    course_payload = put_course.last_request.json()["course"]
+    assert course_payload["restrict_enrollments_to_course_dates"] is False
+
+    settings_payload = put_settings.last_request.json()
+    assert settings_payload["restrict_enrollments_to_course_dates"] is False
+    assert settings_payload["restrict_student_future_view"] is False
+    assert settings_payload["restrict_student_past_view"] is True
 
 
 def test_override_sis_fields(tmp_path, requests_mock):
@@ -432,7 +521,7 @@ def test_override_sis_fields(tmp_path, requests_mock):
         canvas=canvas,
         id_map={},
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
         sis_course_id="NEW-SIS",
         integration_id="integration-123",
         sis_import_id="import-456",
@@ -478,7 +567,7 @@ def test_applies_course_navigation(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     assert tab_modules.called
@@ -524,7 +613,7 @@ def test_uploads_course_image_when_missing_id_map(tmp_path, requests_mock):
         canvas=canvas,
         id_map=id_map,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     assert put_course.called
@@ -564,7 +653,7 @@ def test_uploads_course_image_without_original_id(tmp_path, requests_mock):
         canvas=canvas,
         id_map={},
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     assert put_course.called
@@ -602,7 +691,7 @@ def test_maps_grading_standard_with_id_map(tmp_path, requests_mock):
         canvas=canvas,
         id_map=id_map,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     assert put_course.called
@@ -659,7 +748,7 @@ def test_creates_grading_standard_when_missing_map(tmp_path, requests_mock):
         canvas=canvas,
         id_map=id_map,
         auto_set_term=False,
-        force_course_dates=False,
+        participation_mode="inherit",
     )
 
     assert post_standard.called
