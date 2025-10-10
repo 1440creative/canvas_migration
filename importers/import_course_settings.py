@@ -426,7 +426,7 @@ def import_course_settings(
     target_account_id: Optional[int] = None,
     id_map: Optional[Dict[str, Dict[Any, Any]]] = None,
     auto_set_term: bool = True,
-    term_name: str = "Default",
+    term_name: str = "Default Term",
     term_id: Optional[int] = None,
     participation_mode: str = "course",
     sis_course_id: Optional[str] = None,

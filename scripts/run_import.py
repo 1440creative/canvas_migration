@@ -120,8 +120,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_false",
         help="Skip importing quiz questions even if questions.json is present.",
     )
-    ap.add_argument("--term-name", default="Default",
-                    help="Enrollment term name to assign in the target course (default: 'Default'). Use empty string to skip.")
+    ap.add_argument("--term-name", default="Default Term",
+                    help="Enrollment term name to assign in the target course (default: 'Default Term'). Use empty string to skip.")
     ap.add_argument("--term-id", type=int, default=None,
                     help="Explicit enrollment term ID to assign (overrides --term-name lookup).")
     ap.add_argument("--no-auto-term", action="store_true",

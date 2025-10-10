@@ -148,7 +148,7 @@ def import_course(
     id_map_path: Optional[Path] = None,
     include_quiz_questions: bool = False,
     continue_on_error: bool = True,
-    auto_term_name: Optional[str] = "Default",
+    auto_term_name: Optional[str] = "Default Term",
     auto_term_id: Optional[int] = None,
     participation_mode: str = "course",
     sis_course_id: Optional[str] = None,

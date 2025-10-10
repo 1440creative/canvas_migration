@@ -322,7 +322,7 @@ def test_target_account_id_overrides_course_lookup(tmp_path, requests_mock):
 
     get_terms = requests_mock.get(
         f"{api_base}/api/v1/accounts/54/terms",
-        json={"enrollment_terms": [{"id": 321, "name": "Default"}]},
+        json={"enrollment_terms": [{"id": 321, "name": "Default Term"}]},
         status_code=200,
     )
 
@@ -331,7 +331,7 @@ def test_target_account_id_overrides_course_lookup(tmp_path, requests_mock):
         export_root=export_root,
         canvas=canvas,
         target_account_id=54,
-        term_name="Default",
+        term_name="Default Term",
         participation_mode="inherit",
     )
 
@@ -393,7 +393,7 @@ def test_auto_term_and_course_participation(tmp_path, requests_mock):
     )
     requests_mock.get(
         f"{api_base}/api/v1/accounts/42/terms",
-        json={"enrollment_terms": [{"id": 314, "name": "Default"}]},
+        json={"enrollment_terms": [{"id": 314, "name": "Default Term"}]},
         status_code=200,
     )
 
