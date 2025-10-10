@@ -546,6 +546,67 @@ def test_grading_standard_failure_falls_back_to_course_dates(tmp_path, requests_
     assert "grading_standard_id" not in settings_payload
 
 
+def test_course_metadata_fallback_on_400(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    meta = {
+        "name": "Fallback Course",
+        "course_code": "FC",
+        "image_id": 123,
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    course_id = 557
+    course_url = f"{api_base}/api/v1/courses/{course_id}"
+
+    requests_mock.register_uri(
+        "PUT",
+        course_url,
+        [
+            {"status_code": 400, "text": "bad course update"},
+            {"status_code": 200, "json": {"ok": True}},
+        ],
+    )
+    requests_mock.put(f"{course_url}/settings", json={"ok": True}, status_code=200)
+
+    import_course_settings(
+        target_course_id=course_id,
+        export_root=export_root,
+        canvas=canvas,
+        id_map={"files": {123: 456}},
+        auto_set_term=False,
+        participation_mode="course",
+    )
+
+    calls = [
+        req for req in requests_mock.request_history if req.method == "PUT" and req.url == course_url
+    ]
+    assert len(calls) >= 2
+    primary_payload = calls[0].json()["course"]
+    fallback_payload = calls[1].json()["course"]
+
+    assert primary_payload["restrict_enrollments_to_course_dates"] is True
+    assert fallback_payload["restrict_enrollments_to_course_dates"] is True
+    assert fallback_payload["image_id"] == 456
+    assert "grading_standard_id" not in fallback_payload
+    assert set(fallback_payload.keys()).issubset(
+        {
+            "restrict_enrollments_to_course_dates",
+            "image_id",
+            "image_url",
+            "apply_assignment_group_weights",
+            "sis_course_id",
+            "integration_id",
+            "sis_import_id",
+            "grading_standard_enabled",
+        }
+    )
+
+
 def test_participation_term_mode(tmp_path, requests_mock):
     export_root = tmp_path / "export" / "data" / "101"
     course_dir = export_root / "course"

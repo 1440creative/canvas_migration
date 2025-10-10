@@ -743,13 +743,56 @@ def import_course_settings(
             response = canvas.session.put(url, json={"course": course_fields})
             response.raise_for_status()
         except Exception as exc:
-            lg.warning(
-                "Failed to update course metadata",
-                extra={
-                    "status": getattr(response, "status_code", None),
-                    "error": str(exc),
-                },
-            )
+            extra: Dict[str, Any] = {
+                "status": getattr(response, "status_code", None),
+                "error": str(exc),
+            }
+            if response is not None:
+                try:
+                    extra["response"] = response.text
+                except Exception:
+                    pass
+            lg.warning("Failed to update course metadata", extra=extra)
+
+            fallback_keys = {
+                "restrict_enrollments_to_course_dates",
+                "grading_standard_id",
+                "grading_standard_enabled",
+                "image_id",
+                "image_url",
+                "apply_assignment_group_weights",
+                "sis_course_id",
+                "integration_id",
+                "sis_import_id",
+            }
+            fallback_payload = {
+                key: course_fields[key]
+                for key in fallback_keys
+                if key in course_fields
+            }
+            if fallback_payload:
+                fallback_response = None
+                try:
+                    fallback_response = canvas.session.put(url, json={"course": fallback_payload})
+                    fallback_response.raise_for_status()
+                except Exception as fallback_exc:
+                    fallback_extra: Dict[str, Any] = {
+                        "status": getattr(fallback_response, "status_code", None),
+                        "error": str(fallback_exc),
+                        "fields": sorted(fallback_payload.keys()),
+                    }
+                    if fallback_response is not None:
+                        try:
+                            fallback_extra["response"] = fallback_response.text
+                        except Exception:
+                            pass
+                    lg.warning("Fallback course metadata update failed", extra=fallback_extra)
+                else:
+                    counts["updated"] += 1
+                    lg.info(
+                        "Applied fallback course metadata update",
+                        extra={"fields": sorted(fallback_payload.keys())},
+                    )
         else:
             counts["updated"] += 1
 
