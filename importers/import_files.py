@@ -227,7 +227,7 @@ def import_files(
 ) -> Dict[str, int]:
     """
     Upload all files under export_root/files with deterministic folder placement:
-      {target_course_id}/files[/<subdirs>]
+      mirrors the exported folder hierarchy (relative to the files/ directory).
 
     Updates id_map["files"][old_id] = new_id.
     Returns counters: {"imported": N, "skipped": K, "failed": M, "total": T}
@@ -241,9 +241,6 @@ def import_files(
 
     id_map.setdefault("files", {})
     imported = skipped = failed = 0
-
-    # Deterministic root for placement
-    deterministic_root = f"{target_course_id}/files"
 
     # Load/save manifest
     manifest = _load_manifest(export_root)
@@ -275,7 +272,8 @@ def import_files(
         except Exception:
             local_sha = None
 
-        rel = file_path.relative_to(files_dir).as_posix()
+        rel_path = file_path.relative_to(files_dir)
+        rel = rel_path.as_posix()
         manifest_key = rel
 
         # Skip if manifest has same sha256; also restore mapping for id_map
@@ -290,12 +288,12 @@ def import_files(
                     logger.info("Skipped upload (same sha256): %s → existing_id=%s", rel, prev_new_id)
                     continue
 
-        # Compute *deterministic* folder path: {course}/files[/subdirs]
-        subdir = Path(rel).parent.as_posix()
-        if subdir in ("", "."):
-            folder_path = deterministic_root
+        # Preserve exported folder hierarchy relative to files/
+        subdir_path = rel_path.parent
+        if str(subdir_path) in ("", "."):
+            folder_path = ""  # Canvas treats empty string as the course root
         else:
-            folder_path = f"{deterministic_root}/{subdir}"
+            folder_path = subdir_path.as_posix()
 
         logger.debug("Uploading: rel=%s → folder=%s", rel, folder_path)
 

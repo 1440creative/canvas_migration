@@ -77,7 +77,7 @@ docs/gpt_context.md
 docs/working_*.md
 docs/_gpt_chat/*
 docs/structure/*
-
+docs/data/*
 # Trivial or test logs
 docs/_reports
 
