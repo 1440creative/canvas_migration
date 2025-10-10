@@ -1,6 +1,7 @@
 # tests/test_import_course_settings.py
 import json
 import logging
+import re
 from pathlib import Path
 
 from importers.import_course_settings import import_course_settings
@@ -375,6 +376,46 @@ def test_maps_course_image_with_id_map(tmp_path, requests_mock):
     assert body["course"]["image_url"] is None
 
 
+def test_course_image_falls_back_to_settings_image_id(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    meta = {
+        "name": "Design 201",
+        "settings": {
+            "image": "https://canvas.test/courses/101/files/123/download",
+            "image_id": "123",
+        },
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/334", json={"ok": True}, status_code=200
+    )
+
+    requests_mock.put(
+        f"{api_base}/api/v1/courses/334/settings", json={"ok": True}, status_code=200
+    )
+
+    import_course_settings(
+        target_course_id=334,
+        export_root=export_root,
+        canvas=canvas,
+        id_map={"files": {123: 444}},
+        auto_set_term=False,
+        participation_mode="inherit",
+    )
+
+    assert put_course.called
+    body = put_course.last_request.json()
+    course_payload = body["course"]
+    assert course_payload["image_id"] == 444
+    assert course_payload["image_url"] is None
+
+
 def test_auto_term_and_course_participation(tmp_path, requests_mock):
     export_root = tmp_path / "export" / "data" / "101"
     course_dir = export_root / "course"
@@ -417,6 +458,92 @@ def test_auto_term_and_course_participation(tmp_path, requests_mock):
     assert course_payload["restrict_enrollments_to_course_dates"] is True
     settings_payload = put_settings.last_request.json()
     assert settings_payload["restrict_enrollments_to_course_dates"] is True
+
+
+def test_grading_standard_failure_falls_back_to_course_dates(tmp_path, requests_mock, caplog):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    meta = {
+        "name": "History",
+        "account_id": 135,
+        "grading_standard_enabled": True,
+        "grading_standard_id": 5017,
+        "settings": {
+            "grading_standard_enabled": True,
+            "grading_standard_id": 5017,
+        },
+        "start_at": "2025-01-08T00:00:00Z",
+        "end_at": "2025-04-30T23:59:00Z",
+    }
+    meta["grading_standard"] = {
+        "title": "Non-Credit Standard (rounding-enabled)",
+        "grading_scheme": [
+            {"name": "Pass", "value": 0.7},
+            {"name": "Fail", "value": 0.0},
+        ],
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    course_id = 555
+
+    requests_mock.get(
+        f"{api_base}/api/v1/courses/{course_id}",
+        json={"id": course_id, "account_id": 135},
+        status_code=200,
+    )
+    requests_mock.get(
+        f"{api_base}/api/v1/accounts/135/terms",
+        status_code=400,
+        json={"message": "Bad Request"},
+    )
+    requests_mock.post(
+        f"{api_base}/api/v1/courses/{course_id}/grading_standards",
+        status_code=400,
+        json={"message": "Bad Request"},
+    )
+
+    put_course = requests_mock.put(
+        f"{api_base}/api/v1/courses/{course_id}",
+        json={"ok": True},
+        status_code=200,
+    )
+    put_settings = requests_mock.put(
+        f"{api_base}/api/v1/courses/{course_id}/settings",
+        json={"ok": True},
+        status_code=200,
+    )
+    requests_mock.put(
+        re.compile(rf"{api_base}/api/v1/courses/{course_id}/tabs/.*"),
+        json={"ok": True},
+        status_code=200,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        import_course_settings(
+            target_course_id=course_id,
+            export_root=export_root,
+            canvas=canvas,
+            participation_mode="course",
+        )
+
+    assert put_course.called
+    assert put_settings.called
+
+    course_payload = put_course.last_request.json()["course"]
+    assert course_payload["restrict_enrollments_to_course_dates"] is True
+    assert course_payload["grading_standard_enabled"] is False
+    assert "grading_standard_id" not in course_payload
+
+    settings_payload = put_settings.last_request.json()
+    assert settings_payload["restrict_enrollments_to_course_dates"] is True
+    assert settings_payload["restrict_student_future_view"] is True
+    assert settings_payload["restrict_student_past_view"] is True
+    assert settings_payload["grading_standard_enabled"] is False
+    assert "grading_standard_id" not in settings_payload
 
 
 def test_participation_term_mode(tmp_path, requests_mock):

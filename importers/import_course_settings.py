@@ -500,6 +500,16 @@ def import_course_settings(
 
         settings_data = meta.get("settings") if isinstance(meta.get("settings"), dict) else None
 
+        def _ensure_settings_dict() -> Dict[str, Any]:
+            nonlocal settings_data
+            if settings_data is None:
+                settings_data = {}
+            return settings_data
+
+        def _set_setting_flag(key: str, value: Any) -> None:
+            data = _ensure_settings_dict()
+            data[key] = value
+
         grading_standard_enabled_raw = meta.get("grading_standard_enabled")
         if grading_standard_enabled_raw is None and settings_data is not None:
             grading_standard_enabled_raw = settings_data.get("grading_standard_enabled")
@@ -559,10 +569,19 @@ def import_course_settings(
                     "Grading standard %s could not be mapped or created; course will use default scheme",
                     old_grading_standard_id,
                 )
+                course_fields.pop("grading_standard_id", None)
+                course_fields["grading_standard_enabled"] = False
+                settings_dict = _ensure_settings_dict()
+                settings_dict.pop("grading_standard_id", None)
+                settings_dict["grading_standard_enabled"] = False
+                meta["grading_standard_id"] = None
+                meta["grading_standard_enabled"] = False
 
         # Rewrite course image using file id_map when available, otherwise fall back to uploaded export file
         files_map = _normalize_int_map((id_map or {}).get("files"))
         image_id = meta.get("image_id") or meta.get("image_id_str")
+        if image_id is None and settings_data:
+            image_id = settings_data.get("image_id") or settings_data.get("image_id_str") or settings_data.get("banner_image_id")
         try:
             old_image_id = int(image_id) if image_id is not None else None
         except (TypeError, ValueError):
@@ -650,16 +669,6 @@ def import_course_settings(
         if original_past is None:
             original_past = meta.get("restrict_student_past_view")
 
-        def _ensure_settings_dict() -> Dict[str, Any]:
-            nonlocal settings_data
-            if settings_data is None:
-                settings_data = {}
-            return settings_data
-
-        def _set_setting_flag(key: str, value: Any) -> None:
-            data = _ensure_settings_dict()
-            data[key] = value
-
         if participation_mode_normalized == "course":
             course_fields["restrict_enrollments_to_course_dates"] = True
             _set_setting_flag("restrict_enrollments_to_course_dates", True)
@@ -728,17 +737,41 @@ def import_course_settings(
     if course_fields:
         url = _full_url(base, f"/v1/courses/{target_course_id}")
         lg.debug("PUT /courses/%s from course_metadata.json", target_course_id)
-        # Canvas expects course-level updates wrapped in {"course": {...}}
-        canvas.session.put(url, json={"course": course_fields})
-        counts["updated"] += 1
+        response = None
+        try:
+            # Canvas expects course-level updates wrapped in {"course": {...}}
+            response = canvas.session.put(url, json={"course": course_fields})
+            response.raise_for_status()
+        except Exception as exc:
+            lg.warning(
+                "Failed to update course metadata",
+                extra={
+                    "status": getattr(response, "status_code", None),
+                    "error": str(exc),
+                },
+            )
+        else:
+            counts["updated"] += 1
 
     # PUT /courses/:id/settings if present
     settings = settings_data if isinstance(settings_data, dict) else None
     if isinstance(settings, dict) and settings:
         url = _full_url(base, f"/v1/courses/{target_course_id}/settings")
         lg.debug("PUT /courses/%s/settings", target_course_id)
-        canvas.session.put(url, json=settings)
-        counts["updated"] += 1
+        response = None
+        try:
+            response = canvas.session.put(url, json=settings)
+            response.raise_for_status()
+        except Exception as exc:
+            lg.warning(
+                "Failed to update course settings",
+                extra={
+                    "status": getattr(response, "status_code", None),
+                    "error": str(exc),
+                },
+            )
+        else:
+            counts["updated"] += 1
 
     # --- 2) syllabus HTML
     syllabus_html = course_dir / "syllabus.html"
