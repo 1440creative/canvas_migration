@@ -599,8 +599,62 @@ def test_course_metadata_fallback_on_400(tmp_path, requests_mock):
             "image_id",
             "apply_assignment_group_weights",
             "grading_standard_enabled",
+            "start_at",
+            "end_at",
         }
     )
+
+
+def test_course_metadata_retry_without_term(tmp_path, requests_mock):
+    export_root = tmp_path / "export" / "data" / "101"
+    course_dir = export_root / "course"
+
+    meta = {
+        "name": "Retry Course",
+        "course_code": "RC",
+        "term_id": 2,
+        "start_at": "2025-01-01T00:00:00Z",
+        "end_at": "2025-04-01T00:00:00Z",
+    }
+    _write(course_dir / "course_metadata.json", json.dumps(meta))
+
+    api_base = "https://api.example.edu"
+    canvas = DummyCanvas(api_base)
+
+    course_id = 558
+    course_url = f"{api_base}/api/v1/courses/{course_id}"
+
+    requests_mock.register_uri(
+        "PUT",
+        course_url,
+        [
+            {"status_code": 400, "text": "term not found"},
+            {"status_code": 200, "json": {"ok": True}},
+        ],
+    )
+    requests_mock.put(f"{course_url}/settings", json={"ok": True}, status_code=200)
+
+    import_course_settings(
+        target_course_id=course_id,
+        export_root=export_root,
+        canvas=canvas,
+        auto_set_term=False,
+        participation_mode="course",
+    )
+
+    calls = [
+        req for req in requests_mock.request_history if req.method == "PUT" and req.url == course_url
+    ]
+    assert len(calls) >= 2
+    first_payload = calls[0].json()["course"]
+    second_payload = calls[1].json()["course"]
+
+    assert first_payload["enrollment_term_id"] == 2
+    assert first_payload["start_at"] == "2025-01-01T00:00:00Z"
+    assert first_payload["end_at"] == "2025-04-01T00:00:00Z"
+    assert "enrollment_term_id" not in second_payload
+    assert second_payload["start_at"] == "2025-01-01T00:00:00Z"
+    assert second_payload["end_at"] == "2025-04-01T00:00:00Z"
 
 
 def test_participation_term_mode(tmp_path, requests_mock):

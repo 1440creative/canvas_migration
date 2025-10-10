@@ -754,6 +754,33 @@ def import_course_settings(
                     pass
             lg.warning("Failed to update course metadata", extra=extra)
 
+            retried = False
+            if "enrollment_term_id" in course_fields:
+                retry_payload = {k: v for k, v in course_fields.items() if k != "enrollment_term_id"}
+                if retry_payload:
+                    retry_response = None
+                    try:
+                        retry_response = canvas.session.put(url, json={"course": retry_payload})
+                        retry_response.raise_for_status()
+                    except Exception as retry_exc:
+                        retry_extra: Dict[str, Any] = {
+                            "status": getattr(retry_response, "status_code", None),
+                            "error": str(retry_exc),
+                        }
+                        if retry_response is not None:
+                            try:
+                                retry_extra["response"] = retry_response.text
+                            except Exception:
+                                pass
+                        lg.warning("Course metadata retry without term failed", extra=retry_extra)
+                    else:
+                        counts["updated"] += 1
+                        retried = True
+                        lg.info(
+                            "Course metadata updated without enrollment_term_id",
+                            extra={"fields": sorted(retry_payload.keys())},
+                        )
+
             fallback_keys = {
                 "restrict_enrollments_to_course_dates",
                 "grading_standard_id",
@@ -764,6 +791,8 @@ def import_course_settings(
                 "sis_course_id",
                 "integration_id",
                 "sis_import_id",
+                "start_at",
+                "end_at",
             }
             fallback_payload: Dict[str, Any] = {}
             for key in fallback_keys:
@@ -775,7 +804,7 @@ def import_course_settings(
                 if isinstance(value, str) and not value.strip():
                     continue
                 fallback_payload[key] = value
-            if fallback_payload:
+            if fallback_payload and not retried:
                 fallback_response = None
                 try:
                     fallback_response = canvas.session.put(url, json={"course": fallback_payload})
