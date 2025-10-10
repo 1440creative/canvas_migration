@@ -783,6 +783,8 @@ def import_course_settings(
 
             fallback_keys = {
                 "restrict_enrollments_to_course_dates",
+                "restrict_student_future_view",
+                "restrict_student_past_view",
                 "grading_standard_id",
                 "grading_standard_enabled",
                 "image_id",

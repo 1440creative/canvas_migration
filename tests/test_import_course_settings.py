@@ -596,6 +596,8 @@ def test_course_metadata_fallback_on_400(tmp_path, requests_mock):
     assert set(fallback_payload.keys()).issubset(
         {
             "restrict_enrollments_to_course_dates",
+            "restrict_student_future_view",
+            "restrict_student_past_view",
             "image_id",
             "apply_assignment_group_weights",
             "grading_standard_enabled",
