@@ -765,11 +765,16 @@ def import_course_settings(
                 "integration_id",
                 "sis_import_id",
             }
-            fallback_payload = {
-                key: course_fields[key]
-                for key in fallback_keys
-                if key in course_fields
-            }
+            fallback_payload: Dict[str, Any] = {}
+            for key in fallback_keys:
+                if key not in course_fields:
+                    continue
+                value = course_fields[key]
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    continue
+                fallback_payload[key] = value
             if fallback_payload:
                 fallback_response = None
                 try:
@@ -786,12 +791,16 @@ def import_course_settings(
                             fallback_extra["response"] = fallback_response.text
                         except Exception:
                             pass
-                    lg.warning("Fallback course metadata update failed", extra=fallback_extra)
+                    lg.warning(
+                        "Fallback course metadata update failed (fields=%s)",
+                        ",".join(sorted(fallback_payload.keys())) or "none",
+                        extra=fallback_extra,
+                    )
                 else:
                     counts["updated"] += 1
                     lg.info(
-                        "Applied fallback course metadata update",
-                        extra={"fields": sorted(fallback_payload.keys())},
+                        "Applied fallback course metadata update fields=%s",
+                        ",".join(sorted(fallback_payload.keys())) or "none",
                     )
         else:
             counts["updated"] += 1

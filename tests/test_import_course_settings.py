@@ -597,11 +597,7 @@ def test_course_metadata_fallback_on_400(tmp_path, requests_mock):
         {
             "restrict_enrollments_to_course_dates",
             "image_id",
-            "image_url",
             "apply_assignment_group_weights",
-            "sis_course_id",
-            "integration_id",
-            "sis_import_id",
             "grading_standard_enabled",
         }
     )
