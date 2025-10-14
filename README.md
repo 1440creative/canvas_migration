@@ -126,6 +126,27 @@ When the source course relies on a custom grading scheme, create the matching sc
 
 Quiz question payloads are now exported and imported by default. Use `--skip-questions` with `scripts/run_export.py` or `--skip-quiz-questions` with `scripts/run_import.py` if you need to opt out for troubleshooting.
 
+---
+
+## Batch automation
+
+Use `scripts/batch_export_bac.py` to collect BAC courses flagged as ready in the coordination workbook. Successful exports log course ids to `docs/exported_course_ids.txt` (configurable) so you can track which bundles are ready to import.
+
+After exports finish, run `scripts/batch_import_bac.py` to import each bundle into a target Canvas account. The importer creates courses automatically under the specified account unless you append extra arguments (e.g., `--target-course-id`) via `--extra-import-args`.
+
+Example:
+
+```bash
+python scripts/batch_import_bac.py \
+  --export-root export/data \
+  --target-account-id 135 \
+  --summary-dir docs/import_summaries \
+  --record-path docs/imported_courses.txt \
+  --include-quiz-questions \
+  -vv --extra-import-args -- --participation course
+```
+
+`--summary-dir` writes `import_summary_<course>.json` files mirroring the single-course importer, and `--record-path` appends a TSV row per run (`source_id`, `course_name`, `summary_filename`) to simplify downstream auditing.
 
 ---
 
