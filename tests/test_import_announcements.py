@@ -57,13 +57,7 @@ def test_import_announcement_alt_html_name(tmp_path, requests_mock):
     api_base = "https://api.example.edu"
     course_id = 777
     create_url = f"{api_base}/api/v1/courses/{course_id}/discussion_topics"
-    update_url = f"{api_base}/api/v1/courses/{course_id}/discussion_topics/314"
     requests_mock.post(create_url, json={"id": 314}, status_code=200)
-    requests_mock.put(
-        update_url,
-        additional_matcher=lambda request: request.json().get("discussion_topic") == {"pinned": True, "locked": True},
-        status_code=200,
-    )
 
     canvas = DummyCanvas(api_base)
     importer = load_importer(Path.cwd())
@@ -77,3 +71,5 @@ def test_import_announcement_alt_html_name(tmp_path, requests_mock):
 
     assert counters["imported"] == 1
     assert id_map["announcements"][42] == 314
+    update_call = next(call for call in canvas.put_calls if "/courses/777/discussion_topics/314" in call["endpoint"])
+    assert update_call["json"]["discussion_topic"] == {"pinned": True, "locked": True}

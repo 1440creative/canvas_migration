@@ -13,6 +13,7 @@ class CanvasLike(Protocol):
     api_root: str
     session: requests.Session
     def post(self, endpoint: str, **kwargs) -> Any: ...
+    def put(self, endpoint: str, **kwargs) -> Any: ...
     # Some wrappers also expose:
     # def post_json(self, endpoint: str, *, payload: Dict[str, Any]) -> Any: ...
     # We’ll feature-detect and use if present.
@@ -188,11 +189,9 @@ def import_announcements(
             if update_fields:
                 update_payload = {"discussion_topic": update_fields}
                 update_endpoint = f"/api/v1/courses/{target_course_id}/discussion_topics/{new_id}"
-                update_url = f"{canvas.api_root.rstrip('/')}{update_endpoint}"
                 try:
                     log.debug("Updating announcement flags", extra={"announcement_id": new_id, "fields": update_fields})
-                    resp = canvas.session.put(update_url, json=update_payload)
-                    resp.raise_for_status()
+                    canvas.put(update_endpoint, json=update_payload)
                 except Exception as exc:
                     log.warning(
                         "Failed to update announcement flags",
