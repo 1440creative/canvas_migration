@@ -63,6 +63,7 @@ Thumbs.db
 # Exported course data
 export/data/
 export/test_data/
+export/batch_test_data/
 sandbox_export/
 
 # Zip bundles for sharing
@@ -80,6 +81,9 @@ docs/structure/*
 docs/data/*
 # Trivial or test logs
 docs/_reports
+
+# export logs
+docs/exported_course_ids.txt
 
 
 # Scratch state

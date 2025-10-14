@@ -40,28 +40,36 @@ def iter_export_bundles(root: Path) -> Iterator[ExportBundle]:
         if not entry.is_dir():
             continue
 
-        course_dir = entry / "course" / "course_metadata.json"
+        meta_path = entry / "course" / "course_metadata.json"
+
+        # Skip shared helper directories that are not actual course exports.
+        if not entry.name.isdigit() and not meta_path.exists():
+            print(f"Skipping non-course directory: {entry}")
+            continue
+        if not meta_path.exists():
+            print(f"Skipping incomplete export (missing course metadata): {entry}")
+            continue
+
         source_id: int | None = None
         display_name = entry.name
 
-        if course_dir.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            meta = {}
+        if isinstance(meta, dict):
+            candidate = meta.get("id") or meta.get("course_id") or meta.get("canvas_course_id")
+            if candidate is None and isinstance(meta.get("course"), dict):
+                candidate = meta["course"].get("id")
             try:
-                meta = json.loads(course_dir.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                meta = {}
-            if isinstance(meta, dict):
-                candidate = meta.get("id") or meta.get("course_id") or meta.get("canvas_course_id")
-                if candidate is None and isinstance(meta.get("course"), dict):
-                    candidate = meta["course"].get("id")
-                try:
-                    if candidate is not None:
-                        source_id = int(str(candidate))
-                except (TypeError, ValueError):
-                    source_id = None
+                if candidate is not None:
+                    source_id = int(str(candidate))
+            except (TypeError, ValueError):
+                source_id = None
 
-                name = meta.get("name") or meta.get("course_code") or meta.get("course_code_display")
-                if isinstance(name, str) and name.strip():
-                    display_name = name.strip()
+            name = meta.get("name") or meta.get("course_code") or meta.get("course_code_display")
+            if isinstance(name, str) and name.strip():
+                display_name = name.strip()
 
         if source_id is None:
             try:
