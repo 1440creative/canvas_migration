@@ -179,6 +179,26 @@ def import_announcements(
             counters["imported"] += 1
             log.info("Created announcement '%s' → new_id=%s", title, new_id)
 
+            # Apply post-create flags (e.g., pinned/locked) when present in metadata.
+            update_fields: Dict[str, Any] = {}
+            for field in ("pinned", "locked"):
+                if field in meta:
+                    update_fields[field] = bool(meta.get(field))
+
+            if update_fields:
+                update_payload = {"discussion_topic": update_fields}
+                update_endpoint = f"/api/v1/courses/{target_course_id}/discussion_topics/{new_id}"
+                update_url = f"{canvas.api_root.rstrip('/')}{update_endpoint}"
+                try:
+                    log.debug("Updating announcement flags", extra={"announcement_id": new_id, "fields": update_fields})
+                    resp = canvas.session.put(update_url, json=update_payload)
+                    resp.raise_for_status()
+                except Exception as exc:
+                    log.warning(
+                        "Failed to update announcement flags",
+                        extra={"announcement_id": new_id, "fields": update_fields, "error": str(exc)},
+                    )
+
         except Exception as e:
             counters["failed"] += 1
             log.exception("Failed to import announcement from %s: %s", meta_file.parent, e)

@@ -50,14 +50,20 @@ def test_import_announcement_alt_html_name(tmp_path, requests_mock):
     a_dir = export_root / "announcements" / "policy-update"
     a_dir.mkdir(parents=True)
 
-    meta = {"id": 42, "title": "Policy Update", "html_path": "message.html"}
+    meta = {"id": 42, "title": "Policy Update", "html_path": "message.html", "pinned": True, "locked": True}
     (a_dir / "announcement_metadata.json").write_text(json.dumps(meta), encoding="utf-8")
     (a_dir / "message.html").write_text("<p>Please read.</p>", encoding="utf-8")
 
     api_base = "https://api.example.edu"
     course_id = 777
     create_url = f"{api_base}/api/v1/courses/{course_id}/discussion_topics"
+    update_url = f"{api_base}/api/v1/courses/{course_id}/discussion_topics/314"
     requests_mock.post(create_url, json={"id": 314}, status_code=200)
+    requests_mock.put(
+        update_url,
+        additional_matcher=lambda request: request.json().get("discussion_topic") == {"pinned": True, "locked": True},
+        status_code=200,
+    )
 
     canvas = DummyCanvas(api_base)
     importer = load_importer(Path.cwd())
