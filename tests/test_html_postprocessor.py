@@ -23,6 +23,10 @@ def test_postprocess_html_rewrites_links(tmp_path):
         <a href="https://canvas.example.com/courses/77275/files/45/download">File</a>
         <a href="https://canvas.example.com/api/v1/courses/77275/discussion_topics/77">Discussion</a>
         <a href="/courses/77275/modules/88">Module</a>
+        <a href="https://canvas.example.com/courses/77275/modules">Modules index</a>
+        <a data-api-endpoint="https://canvas.example.com/api/v1/courses/77275/modules">Modules API</a>
+        <a href="/courses/77275/announcements">Announcements</a>
+        <a data-api-endpoint="/api/v1/courses/77275/announcements">Announcements API</a>
         """,
     )
 
@@ -43,6 +47,10 @@ def test_postprocess_html_rewrites_links(tmp_path):
     assert "courses/456/files/900" in updated_html
     assert "courses/456/discussion_topics/910" in updated_html
     assert "courses/456/modules/920" in updated_html
+    assert 'courses/456/modules"' in updated_html
+    assert 'api/v1/courses/456/modules' in updated_html
+    assert 'courses/456/announcements' in updated_html
+    assert 'api/v1/courses/456/announcements' in updated_html
 
 
 def test_postprocess_html_dry_run(tmp_path):

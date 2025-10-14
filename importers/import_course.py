@@ -384,6 +384,29 @@ def rewrite_canvas_links(
 
     result = html
 
+    def _replace_course_route(text: str, route: str) -> str:
+        course_pattern = re.compile(
+            rf'(?P<prefix>(?:https?://[^"\'\s]+)?/courses/){source_course_id}/{route}(?P<tail>[^"\'\s]*)'
+        )
+
+        def _course_repl(match: re.Match[str]) -> str:
+            prefix = _normalize_canvas_prefix(match.group("prefix"))
+            tail = match.group("tail") or ""
+            return f"{prefix}{target_course_id}/{route}{tail}"
+
+        api_pattern = re.compile(
+            rf'(?P<prefix>(?:https?://[^"\'\s]+)?/api/v1/courses/){source_course_id}/{route}(?P<tail>[^"\'\s]*)'
+        )
+
+        def _api_repl(match: re.Match[str]) -> str:
+            prefix = _normalize_canvas_prefix(match.group("prefix"))
+            tail = match.group("tail") or ""
+            return f"{prefix}{target_course_id}/{route}{tail}"
+
+        text = course_pattern.sub(_course_repl, text)
+        text = api_pattern.sub(_api_repl, text)
+        return text
+
     files_map = _normalize_numeric_map(id_map.get("files"))
     assignments_map = _normalize_numeric_map(id_map.get("assignments"))
     quizzes_map = _normalize_numeric_map(id_map.get("quizzes"))
@@ -480,6 +503,9 @@ def rewrite_canvas_links(
             return f"{prefix}{target_course_id}/pages/{new_slug}{tail}"
 
         result = page_api_pattern.sub(_page_api_repl, result)
+
+    for route in ("modules", "announcements"):
+        result = _replace_course_route(result, route)
 
     result = re.sub(r"https?:/(?=[^/])", "/", result)
 
