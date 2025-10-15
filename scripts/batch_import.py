@@ -6,7 +6,7 @@ Given a directory of export bundles (as produced by batch_export.py),
 invoke scripts/run_import.py for each bundle and optionally track results.
 
 Usage examples:
-  python scripts/batch_import_bac.py \
+  python scripts/batch_import.py \
     --export-root export/data \
     --target-account-id 135 \
     --summary-dir docs/import_summaries \
@@ -129,7 +129,7 @@ def append_record(record_path: Path, export: ExportBundle, summary_path: Path | 
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run imports for BAC courses from export bundles.")
+    parser = argparse.ArgumentParser(description="Run imports for batch export bundles.")
     parser.add_argument("--export-root", type=Path, default=Path("export/data"), help="Directory containing export bundles.")
     parser.add_argument(
         "--target-account-id",
