@@ -11,6 +11,7 @@ Usage examples:
     --target-account-id 135 \
     --summary-dir docs/import_summaries \
     --record-path docs/imported_courses.txt \
+    --course-prefix CITY \
     --include-quiz-questions
 """
 from __future__ import annotations
@@ -29,6 +30,16 @@ class ExportBundle:
     source_id: int | None
     display_name: str
     path: Path
+
+
+def bundle_source_id(bundle: ExportBundle) -> int | None:
+    """Return a numeric source identifier if available."""
+    if bundle.source_id is not None:
+        return bundle.source_id
+    try:
+        return int(bundle.path.name)
+    except ValueError:
+        return None
 
 
 def iter_export_bundles(root: Path) -> Iterator[ExportBundle]:
@@ -153,6 +164,30 @@ def main() -> int:
         help="Optional TSV to append (source_id, course_name, summary filename).",
     )
     parser.add_argument(
+        "--record-reset",
+        action="store_true",
+        help="Clear the record file before starting a new batch run.",
+    )
+    parser.add_argument(
+        "--course-prefix",
+        type=str,
+        default=None,
+        help="Only include bundles whose display name starts with this prefix (case-sensitive).",
+    )
+    parser.add_argument(
+        "--course-ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Only include bundles whose source ids match the provided list.",
+    )
+    parser.add_argument(
+        "--course-id-file",
+        type=Path,
+        default=None,
+        help="Optional file containing source ids (one per line) to include.",
+    )
+    parser.add_argument(
         "--summary-dir",
         type=Path,
         default=None,
@@ -166,15 +201,40 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    if args.record_path and args.record_reset and args.record_path.exists():
+        args.record_path.unlink()
+
+    filter_ids: set[int] = set(args.course_ids or [])
+    if args.course_id_file:
+        if not args.course_id_file.exists():
+            raise FileNotFoundError(f"course id file not found: {args.course_id_file}")
+        for line in args.course_id_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                filter_ids.add(int(line))
+            except ValueError:
+                print(f"Ignoring non-numeric id in {args.course_id_file}: {line!r}")
+
     bundles = list(iter_export_bundles(args.export_root))
+
+    if args.course_prefix:
+        bundles = [b for b in bundles if b.display_name.startswith(args.course_prefix)]
+
+    if filter_ids:
+        bundles = [b for b in bundles if (sid := bundle_source_id(b)) is not None and sid in filter_ids]
+
     if args.offset:
         bundles = bundles[args.offset :]
     if args.limit is not None:
         bundles = bundles[: args.limit]
 
     if not bundles:
-        print(f"No export bundles found under {args.export_root}")
+        print(f"No export bundles found under {args.export_root} with the provided filters.")
         return 0
+
+    print(f"Found {len(bundles)} bundle(s) to import.")
 
     steps: Sequence[str] = args.steps
     if args.summary_dir:

@@ -132,7 +132,7 @@ Quiz question payloads are now exported and imported by default. Use `--skip-que
 
 Use `scripts/batch_export.py` to collect courses flagged as ready in the coordination workbook. Successful exports log course ids to `docs/exported_course_ids.txt` (configurable) so you can track which bundles are ready to import.
 
-After exports finish, run `scripts/batch_import.py` to import each bundle into a target Canvas account. The importer creates courses automatically under the specified account unless you append extra arguments (e.g., `--target-course-id`) via `--extra-import-args`.
+After exports finish, run `scripts/batch_import.py` to import each bundle into a target Canvas account. The importer creates courses automatically under the specified account unless you append extra arguments (e.g., `--target-course-id`) via `--extra-import-args`. Use `--course-prefix`, `--course-ids`, or `--course-id-file` when you need to limit a run to a subset of exports, and `--record-reset` if you want a fresh record file per batch.
 
 Example:
 
@@ -142,6 +142,8 @@ python scripts/batch_import.py \
   --target-account-id 135 \
   --summary-dir docs/import_summaries \
   --record-path docs/imported_courses.txt \
+  --course-prefix CITY \
+  --record-reset \
   --include-quiz-questions \
   -vv --extra-import-args -- --participation course
 ```
