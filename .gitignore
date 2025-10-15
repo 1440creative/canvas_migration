@@ -65,6 +65,7 @@ export/data/
 export/test_data/
 export/batch_test_data/
 sandbox_export/
+export/*_batch_test/
 
 # Zip bundles for sharing
 *.zip

@@ -103,20 +103,24 @@ def export_files(course_id: int, export_root: Path, api: CanvasAPI) -> List[Dict
             continue
 
         # Stream the download to a temp file in the destination dir, then atomic replace
-        _download_stream_to_path(api, download_url, file_path)
+        downloaded = _download_stream_to_path(api, download_url, file_path, log)
 
-        # Compute hashes
-        hashes = file_hashes(file_path)
+        if downloaded:
+            hashes = file_hashes(file_path)
+            sha256 = hashes["sha256"]
+            md5 = hashes["md5"]
+        else:
+            sha256 = None
+            md5 = None
 
-        # Build metadata
         meta = _build_metadata(
             fid=fid,
             filename=filename,
             content_type=content_type,
             rel_file_path=rel_file_path,
             folder_full_name=_folder_full_name(folders_map, folder_id),
-            sha256=hashes["sha256"],
-            md5=hashes["md5"],
+            sha256=sha256,
+            md5=md5,
             course_root=course_root,
             course_id=course_id,
             api=api,
@@ -125,9 +129,15 @@ def export_files(course_id: int, export_root: Path, api: CanvasAPI) -> List[Dict
         _write_sidecar(file_path, meta)
         exported.append(meta)
 
+        log_action = "exported file" if downloaded else "recorded file metadata (download skipped)"
         log.info(
-            "exported file",
-            extra={"file_id": fid, "folder": "/".join(segs), "file_name": filename, "path": rel_file_path},
+            log_action,
+            extra={
+                "file_id": fid,
+                "folder": "/".join(segs),
+                "file_name": filename,
+                "path": rel_file_path,
+            },
         )
 
     log.info("exported files complete", extra={"count": len(exported)})
@@ -180,19 +190,30 @@ def _folder_full_name(folders_map: Dict[int, List[str]] | None, folder_id: Any) 
     return FALLBACK_FOLDER
 
 
-def _download_stream_to_path(api: CanvasAPI, url: str, dest: Path) -> None:
-    """Stream a download to dest atomically (tmp file + replace)."""
+def _download_stream_to_path(api: CanvasAPI, url: str, dest: Path, log) -> bool:
+    """Stream a download to dest atomically (tmp file + replace).
+
+    Returns True when content was written, False if the download was skipped due to benign 4xx.
+    """
     ensure_dir(dest.parent)
     with tempfile.NamedTemporaryFile(delete=False, dir=dest.parent) as tmp:
         tmp_path = Path(tmp.name)
     try:
         with api.session.get(url, stream=True, timeout=(5, 60)) as r:  # type: ignore[attr-defined]
+            if r.status_code in (404, 410, 422):
+                log.warning(
+                    "skipping file download",
+                    extra={"status": r.status_code, "url": url, "dest": str(dest)},
+                )
+                tmp_path.unlink(missing_ok=True)
+                return False
             r.raise_for_status()
             with open(tmp_path, "wb") as out:
                 for chunk in r.iter_content(CHUNK):
                     if chunk:
                         out.write(chunk)
         os.replace(tmp_path, dest)
+        return True
     finally:
         try:
             if tmp_path.exists():
