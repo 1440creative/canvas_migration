@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Batch importer for BAC exports.
+Batch importer for batch exports.
 
-Given a directory of export bundles (as produced by batch_export_bac.py),
+Given a directory of export bundles (as produced by batch_export.py),
 invoke scripts/run_import.py for each bundle and optionally track results.
 
 Usage examples:
@@ -131,7 +131,14 @@ def append_record(record_path: Path, export: ExportBundle, summary_path: Path | 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run imports for BAC courses from export bundles.")
     parser.add_argument("--export-root", type=Path, default=Path("export/data"), help="Directory containing export bundles.")
-    parser.add_argument("--target-account-id", type=int, required=True, help="Target Canvas account id for new courses.")
+    parser.add_argument(
+        "--target-account-id",
+        "--target-account",
+        dest="target_account_id",
+        type=int,
+        required=True,
+        help="Target Canvas account id for new courses.",
+    )
     parser.add_argument("--steps", nargs="+", default=[], help="Optional subset of import steps (same names as run_import.py).")
     parser.add_argument("--resume", action="store_true", help="Forward --resume to each run_import invocation.")
     parser.add_argument("--include-quiz-questions", action="store_true", default=True, help="Include quiz questions (default).")

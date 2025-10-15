@@ -130,7 +130,7 @@ Quiz question payloads are now exported and imported by default. Use `--skip-que
 
 ## Batch automation
 
-Use `scripts/batch_export_bac.py` to collect BAC courses flagged as ready in the coordination workbook. Successful exports log course ids to `docs/exported_course_ids.txt` (configurable) so you can track which bundles are ready to import.
+Use `scripts/batch_export.py` to collect courses flagged as ready in the coordination workbook. Successful exports log course ids to `docs/exported_course_ids.txt` (configurable) so you can track which bundles are ready to import.
 
 After exports finish, run `scripts/batch_import_bac.py` to import each bundle into a target Canvas account. The importer creates courses automatically under the specified account unless you append extra arguments (e.g., `--target-course-id`) via `--extra-import-args`.
 

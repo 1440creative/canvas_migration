@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Batch exporter for BAC BPM courses flagged as ready.
+Batch exporter for spreadsheet-driven Canvas courses flagged as ready.
 
 Usage examples:
-  python scripts/batch_export_bac.py --excel docs/data/batch_imports.xlsx --dry-run
-  python scripts/batch_export_bac.py --excel docs/data/batch_imports.xlsx \
+  python scripts/batch_export.py --excel docs/data/batch_imports.xlsx --dry-run
+  python scripts/batch_export.py --excel docs/data/batch_imports.xlsx \
       --export-root export/data --batch-size 3 --steps pages assignments
 
 Requires openpyxl: pip install openpyxl
@@ -41,7 +41,9 @@ def is_ready(value: object) -> bool:
     return text in {"1", "yes", "y", "true"}
 
 
-def iter_ready_courses(excel_path: Path, sheet_name: str = "BPMs") -> list[tuple[str, int]]:
+def iter_ready_courses(
+    excel_path: Path, sheet_name: str = "BPMs", course_prefix: str | None = None
+) -> list[tuple[str, int]]:
     wb = load_workbook(excel_path, data_only=True)
     if sheet_name not in wb.sheetnames:
         raise ValueError(f"sheet '{sheet_name}' not found in {excel_path}")
@@ -57,7 +59,7 @@ def iter_ready_courses(excel_path: Path, sheet_name: str = "BPMs") -> list[tuple
     rows: list[tuple[str, int]] = []
     for row in ws.iter_rows(min_row=2, values_only=True):
         bpm_raw = normalize_bpm(row[idx["BPM"]])
-        if not bpm_raw.startswith("BAC"):
+        if course_prefix and not bpm_raw.startswith(course_prefix):
             continue
         if not is_ready(row[idx["Ready for Migration"]]):
             continue
@@ -100,11 +102,17 @@ def run_export(course_id: int, export_root: Path, steps: list[str], dry_run: boo
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run exports for BAC BPM courses marked ready.")
+    parser = argparse.ArgumentParser(description="Run exports for courses marked ready in the workbook.")
     parser.add_argument("--excel", type=Path, required=True, help="Path to docs/data/batch_imports.xlsx")
     parser.add_argument("--export-root", type=Path, default=Path("export/data"), help="Export root directory")
     parser.add_argument("--steps", nargs="+", default=[], help="Optional subset of export steps")
     parser.add_argument("--batch-size", type=int, default=5, help="Number of courses per batch")
+    parser.add_argument(
+        "--course-prefix",
+        type=str,
+        default=None,
+        help="Only include rows whose BPM/identifier column starts with this prefix (omit to include all)",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Process only the first N courses")
     parser.add_argument("--dry-run", action="store_true", help="Print commands without running them")
  
@@ -126,11 +134,12 @@ def main() -> int:
         args.record_path.unlink()
 
 
-    courses = iter_ready_courses(args.excel)
+    courses = iter_ready_courses(args.excel, course_prefix=args.course_prefix)
     if args.limit is not None:
         courses = courses[: args.limit]
 
-    print(f"Found {len(courses)} ready BAC courses.")
+    prefix_label = f"prefix '{args.course_prefix}'" if args.course_prefix else "all prefixes"
+    print(f"Found {len(courses)} ready courses matching {prefix_label}.")
     for batch_num, batch in enumerate(batched(courses, args.batch_size), start=1):
         print(f"\nBatch {batch_num}: {[cid for _, cid in batch]}")
         for bpm, course_id in batch:
