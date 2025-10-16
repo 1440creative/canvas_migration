@@ -13,6 +13,7 @@ from utils.api import CanvasAPI
 from utils.fs import ensure_dir, json_dumps_stable, safe_relpath, file_hashes
 from utils.strings import sanitize_slug
 
+import time
 
 CHUNK = 1024 * 1024  # 1 MiB
 FALLBACK_FOLDER = "unfiled"
@@ -222,21 +223,40 @@ def _download_stream_to_path(api: CanvasAPI, url: str, dest: Path, log) -> bool:
     with tempfile.NamedTemporaryFile(delete=False, dir=dest.parent) as tmp:
         tmp_path = Path(tmp.name)
     try:
-        with api.session.get(url, stream=True, timeout=(5, 60)) as r:  # type: ignore[attr-defined]
-            if r.status_code in (404, 410, 422):
+        attempts = 0
+        while attempts < 3:
+            attempts += 1
+            try:
+                with api.session.get(url, stream=True, timeout=(5, 60)) as r:  # type: ignore[attr-defined]
+                    if r.status_code in (404, 410, 422):
+                        log.warning(
+                            "skipping file download",
+                            extra={"status": r.status_code, "url": url, "dest": str(dest)},
+                        )
+                        tmp_path.unlink(missing_ok=True)
+                        return False
+                    r.raise_for_status()
+                    with open(tmp_path, "wb") as out:
+                        for chunk in r.iter_content(CHUNK):
+                            if chunk:
+                                out.write(chunk)
+                os.replace(tmp_path, dest)
+                return True
+            except requests.HTTPError:
+                raise
+            except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as exc:
                 log.warning(
-                    "skipping file download",
-                    extra={"status": r.status_code, "url": url, "dest": str(dest)},
+                    "connection issue during file download",
+                    extra={"url": url, "dest": str(dest), "attempt": attempts, "error": str(exc)},
                 )
-                tmp_path.unlink(missing_ok=True)
-                return False
-            r.raise_for_status()
-            with open(tmp_path, "wb") as out:
-                for chunk in r.iter_content(CHUNK):
-                    if chunk:
-                        out.write(chunk)
-        os.replace(tmp_path, dest)
-        return True
+                if attempts >= 3:
+                    log.error(
+                        "giving up on file download after retries",
+                        extra={"url": url, "dest": str(dest)},
+                    )
+                    tmp_path.unlink(missing_ok=True)
+                    return False
+                time.sleep(1.5 * attempts)
     finally:
         try:
             if tmp_path.exists():
