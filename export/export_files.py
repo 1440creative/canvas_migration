@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 import os
 import tempfile
 
+import requests
+
 from logging_setup import get_logger
 from utils.api import CanvasAPI
 from utils.fs import ensure_dir, json_dumps_stable, safe_relpath, file_hashes
@@ -103,7 +105,28 @@ def export_files(course_id: int, export_root: Path, api: CanvasAPI) -> List[Dict
             continue
 
         # Stream the download to a temp file in the destination dir, then atomic replace
-        downloaded = _download_stream_to_path(api, download_url, file_path, log)
+        try:
+            downloaded = _download_stream_to_path(api, download_url, file_path, log)
+        except requests.HTTPError as err:
+            status = getattr(err.response, "status_code", None)
+            refreshed_url = None
+            if status == 400:
+                detail = api.get(f"files/{fid}")
+                if isinstance(detail, dict):
+                    refreshed_url = detail.get("url") or detail.get("download_url")
+            if refreshed_url and refreshed_url != download_url:
+                log.warning(
+                    "retrying file download with refreshed url",
+                    extra={"file_id": fid, "status": status},
+                )
+                downloaded = _download_stream_to_path(api, refreshed_url, file_path, log)
+                download_url = refreshed_url
+            else:
+                log.error(
+                    "failed to download file",
+                    extra={"file_id": fid, "status": status, "url": download_url},
+                )
+                downloaded = False
 
         if downloaded:
             hashes = file_hashes(file_path)
