@@ -150,6 +150,7 @@ def import_pages(
     export_root: Path,
     canvas,
     id_map: Dict[str, Dict[Any, Any]],
+    update_mode: bool = False,
 ) -> Dict[str, int]:
     """
     Import wiki pages from export/pages/*.
@@ -202,6 +203,57 @@ def import_pages(
                 "published": bool(meta.get("published", True)),
             }
         }
+
+        if update_mode:
+            slug = meta.get("url")
+            if not isinstance(slug, str) or not slug:
+                log.error("missing page slug for update title=%s", title)
+                failed += 1
+                continue
+
+            try:
+                start_time = time.time()
+                resp = canvas.put(
+                    f"/api/v1/courses/{target_course_id}/pages/{slug}",
+                    json=create_payload,
+                )
+                log.debug(
+                    "page PUT complete title=%r status=%s duration=%.2fs",
+                    title,
+                    getattr(resp, "status_code", "?"),
+                    time.time() - start_time,
+                )
+                body = _resp_json(resp)
+            except Exception as e:
+                log.error("page update failed title=%r slug=%s err=%s", title, slug, e)
+                failed += 1
+                continue
+
+            updated_slug = body.get("url") if isinstance(body, dict) else None
+            if isinstance(updated_slug, str) and updated_slug:
+                slug = updated_slug
+
+            imported += 1
+            if src_id is not None:
+                id_map["pages"][src_id] = src_id
+            old_slug = meta.get("url")
+            if isinstance(old_slug, str) and old_slug:
+                id_map["pages_url"][old_slug] = slug
+
+            if bool(meta.get("front_page")):
+                try:
+                    base = _api_base(canvas)
+                    url = f"{base}/api/v1/courses/{target_course_id}/pages/{slug}"
+                    r2 = requests.put(url, json={"wiki_page": {"front_page": True}})
+                    code = getattr(r2, "status_code", None)
+                    ok = isinstance(code, int) and 200 <= code < 300
+                    if not ok:
+                        failed += 1
+                        log.error("failed-frontpage slug=%s status=%s", slug, code)
+                except Exception as e:
+                    failed += 1
+                    log.error("failed-frontpage slug=%s error=%s", slug, e)
+            continue
 
         # --- Create page (soft-fail to allow slug fallback when no HTTP mocks) ---
         api_endpoint = f"/api/v1/courses/{target_course_id}/pages"

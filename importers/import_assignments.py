@@ -145,6 +145,34 @@ def _post_assignment(canvas, endpoint_path: str, payload: Dict[str, Any]) -> Tup
     raise RuntimeError("Create assignment did not return an id")
 
 
+def _put_assignment(canvas, endpoint_path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    PUT the assignment. Return response JSON payload.
+    """
+    url = _abs_url(canvas.api_root, endpoint_path)
+    body_wrapper = {"assignment": payload}
+    r = canvas.session.put(url, json=body_wrapper)
+
+    status = getattr(r, "status_code", None)
+    reason = getattr(r, "reason", "")
+
+    body: Dict[str, Any] = {}
+    try:
+        body = r.json() or {}
+    except Exception:
+        body = {}
+
+    if status and status >= 400:
+        detail_raw = body if body else getattr(r, "text", "")
+        detail = _summarize_error(detail_raw)
+        raise RuntimeError(f"Canvas responded {status} {reason or ''}: {detail}")
+
+    if isinstance(body, dict) and body.get("errors"):
+        raise RuntimeError(f"Canvas returned assignment errors: {body['errors']}")
+
+    return body
+
+
 def _extract_discussion_id(assignment: Dict[str, Any]) -> Optional[int]:
     if not isinstance(assignment, dict):
         return None
@@ -213,6 +241,7 @@ def import_assignments(
     export_root: Path,
     canvas,
     id_map: Dict[str, Dict[Any, Any]],
+    update_mode: bool = False,
 ) -> Dict[str, int]:
     """
     Import assignments from export_root into the target course.
@@ -293,44 +322,45 @@ def import_assignments(
                 if key in meta:
                     payload[key] = meta[key]
 
-            # Remap assignment_group_id when the importer has already created groups.
-            if "assignment_group_id" in payload:
-                group_mapping = id_map.get("assignment_groups") if isinstance(id_map, dict) else None
-                mapped_id = None
-                if isinstance(group_mapping, dict):
-                    raw_old_id = meta.get("assignment_group_id")
-                    lookup_keys = []
-                    if raw_old_id is not None:
-                        lookup_keys.append(raw_old_id)
-                        try:
-                            lookup_keys.append(int(raw_old_id))
-                        except (TypeError, ValueError):
-                            pass
-                    for key in lookup_keys:
-                        if key in group_mapping:
-                            mapped_id = group_mapping[key]
-                            break
-                    if mapped_id is None:
+            if not update_mode:
+                # Remap assignment_group_id when the importer has already created groups.
+                if "assignment_group_id" in payload:
+                    group_mapping = id_map.get("assignment_groups") if isinstance(id_map, dict) else None
+                    mapped_id = None
+                    if isinstance(group_mapping, dict):
+                        raw_old_id = meta.get("assignment_group_id")
+                        lookup_keys = []
+                        if raw_old_id is not None:
+                            lookup_keys.append(raw_old_id)
+                            try:
+                                lookup_keys.append(int(raw_old_id))
+                            except (TypeError, ValueError):
+                                pass
                         for key in lookup_keys:
-                            mapped_id = group_mapping.get(str(key))
-                            if mapped_id is not None:
+                            if key in group_mapping:
+                                mapped_id = group_mapping[key]
                                 break
-                if mapped_id is not None:
-                    try:
-                        payload["assignment_group_id"] = int(mapped_id)
-                    except (TypeError, ValueError):
+                        if mapped_id is None:
+                            for key in lookup_keys:
+                                mapped_id = group_mapping.get(str(key))
+                                if mapped_id is not None:
+                                    break
+                    if mapped_id is not None:
+                        try:
+                            payload["assignment_group_id"] = int(mapped_id)
+                        except (TypeError, ValueError):
+                            payload.pop("assignment_group_id", None)
+                    else:
                         payload.pop("assignment_group_id", None)
-                else:
-                    payload.pop("assignment_group_id", None)
 
-            # Strip identifiers that are tied to the source course. Canvas will
-            # reject these because the new course does not share the same
-            # grading standards or group categories.
-            for stale_key in ("grading_standard_id", "group_category_id"):
-                payload.pop(stale_key, None)
+                # Strip identifiers that are tied to the source course. Canvas will
+                # reject these because the new course does not share the same
+                # grading standards or group categories.
+                for stale_key in ("grading_standard_id", "group_category_id"):
+                    payload.pop(stale_key, None)
 
             submission_types = list(meta.get("submission_types") or [])
-            if any(st == "online_quiz" for st in submission_types):
+            if not update_mode and any(st == "online_quiz" for st in submission_types):
                 log.info(
                     "Skipping assignment backed by quiz",
                     extra={"id": old_id, "name": name},
@@ -338,43 +368,55 @@ def import_assignments(
                 counters["skipped"] += 1
                 continue
 
-            new_id, assignment_body = _post_assignment(canvas, endpoint_path, payload)
+            if update_mode:
+                if not isinstance(old_id, int):
+                    raise RuntimeError("Missing assignment id for update")
+                endpoint_path = f"/api/v1/courses/{target_course_id}/assignments/{old_id}"
+                _put_assignment(canvas, endpoint_path, payload)
+                id_map["assignments"][int(old_id)] = int(old_id)
+                counters["imported"] += 1
+                log.info(
+                    "Updated assignment",
+                    extra={"assignment_id": old_id, "name": name},
+                )
+            else:
+                new_id, assignment_body = _post_assignment(canvas, endpoint_path, payload)
 
-            if isinstance(old_id, int):
-                id_map["assignments"][int(old_id)] = int(new_id)
+                if isinstance(old_id, int):
+                    id_map["assignments"][int(old_id)] = int(new_id)
 
-            # Map graded discussion ids for module importer
-            if isinstance(old_id, int) and old_id in discussion_lookup:
-                src_discussion_id = discussion_lookup[old_id]
-                new_discussion_id = _extract_discussion_id(assignment_body)
-                if new_discussion_id is None:
-                    try:
-                        detail_endpoint = f"/courses/{target_course_id}/assignments/{new_id}"
-                        assignment_detail = _fetch_assignment_detail(canvas, detail_endpoint)
-                        new_discussion_id = _extract_discussion_id(assignment_detail)
-                    except Exception as err:
+                # Map graded discussion ids for module importer
+                if isinstance(old_id, int) and old_id in discussion_lookup:
+                    src_discussion_id = discussion_lookup[old_id]
+                    new_discussion_id = _extract_discussion_id(assignment_body)
+                    if new_discussion_id is None:
+                        try:
+                            detail_endpoint = f"/courses/{target_course_id}/assignments/{new_id}"
+                            assignment_detail = _fetch_assignment_detail(canvas, detail_endpoint)
+                            new_discussion_id = _extract_discussion_id(assignment_detail)
+                        except Exception as err:
+                            log.warning(
+                                "Failed to resolve discussion id for graded discussion",
+                                extra={
+                                    "assignment_id": old_id,
+                                    "new_assignment_id": new_id,
+                                    "error": str(err),
+                                },
+                            )
+                            new_discussion_id = None
+                    if new_discussion_id is not None:
+                        id_map["discussions"][src_discussion_id] = int(new_discussion_id)
+                    else:
                         log.warning(
-                            "Failed to resolve discussion id for graded discussion",
-                            extra={
-                                "assignment_id": old_id,
-                                "new_assignment_id": new_id,
-                                "error": str(err),
-                            },
+                            "Missing discussion mapping for graded discussion assignment",
+                            extra={"assignment_id": old_id, "new_assignment_id": new_id},
                         )
-                        new_discussion_id = None
-                if new_discussion_id is not None:
-                    id_map["discussions"][src_discussion_id] = int(new_discussion_id)
-                else:
-                    log.warning(
-                        "Missing discussion mapping for graded discussion assignment",
-                        extra={"assignment_id": old_id, "new_assignment_id": new_id},
-                    )
 
-            counters["imported"] += 1
-            log.info(
-                "Created assignment",
-                extra={"old_id": old_id, "new_id": new_id, "name": name},
-            )
+                counters["imported"] += 1
+                log.info(
+                    "Created assignment",
+                    extra={"old_id": old_id, "new_id": new_id, "name": name},
+                )
         except Exception as e:
             counters["failed"] += 1
             log.error("failed-create (no id) name=%s", meta.get("name") or a_dir.name)

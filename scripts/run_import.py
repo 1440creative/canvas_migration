@@ -152,6 +152,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="Plan counts only; no API calls.")
     ap.add_argument("--summary-json", type=Path, default=None,
                     help="If provided, write a JSON summary of the run here.")
+    ap.add_argument(
+        "--update-in-place",
+        action="store_true",
+        help="Update existing pages/assignments/discussions in the target course instead of creating new content.",
+    )
     ap.add_argument("-v", "--verbose", action="count", default=0)
 
     args = ap.parse_args(argv)
@@ -165,7 +170,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         participation_mode = "term"
 
     export_root: Path = args.export_root
-    steps = _parse_steps(args.steps)
+    if args.update_in_place and args.steps is None:
+        steps = ["pages", "assignments", "discussions"]
+    else:
+        steps = _parse_steps(args.steps)
     id_map_path = args.id_map or (export_root / "id_map.json")
 
     # Lazy import here to avoid importing requests-heavy modules in dry-run
@@ -178,6 +186,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.dry_run:
         _print_dry_run(export_root, steps)
         return 0
+
+    if args.update_in_place and args.target_course_id is None:
+        ap.error("--update-in-place requires --target-course-id.")
 
     if args.target_course_id is None and args.target_account_id is None:
         ap.error("Provide --target-course-id or supply --target-account-id to create a new course.")
@@ -230,6 +241,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         integration_id=args.integration_id,
         sis_import_id=args.sis_import_id,
         target_account_id=args.target_account_id,
+        update_mode=args.update_in_place,
     )
 
     # Persist id_map after a real run (import_course already saves step-by-step,

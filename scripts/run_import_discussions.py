@@ -14,6 +14,7 @@ def parse_args():
     p.add_argument("--export-root", required=True, type=Path)
     p.add_argument("--target-course-id", required=True, type=int)
     p.add_argument("--id-map", type=Path)
+    p.add_argument("--update-in-place", action="store_true", help="Update existing discussions in place.")
     p.add_argument("-v", "--verbose", action="count", default=1)
     return p.parse_args()
 
@@ -36,6 +37,7 @@ def main() -> int:
         export_root=args.export_root,
         canvas=target_api,
         id_map=id_map,
+        update_mode=args.update_in_place,
     )
     save_id_map(id_map_path, id_map)
     log.info("Done: %s", counters)

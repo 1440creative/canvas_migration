@@ -45,6 +45,7 @@ def import_discussions(
     export_root: Path,
     canvas,
     id_map: Dict[str, Dict[Any, Any]] | None = None,
+    update_mode: bool = False,
 ) -> Dict[str, int]:
     """
     Import non-announcement discussions from export_root/<course_id>/discussions/*
@@ -91,7 +92,7 @@ def import_discussions(
         except (TypeError, ValueError):
             assignment_id = None
 
-        if assignment_id:
+        if assignment_id and not update_mode:
             skipped += 1
             log.info(
                 "Skipping graded discussion; assignment will recreate it.",
@@ -119,50 +120,67 @@ def import_discussions(
             payload["delayed_post_at"] = delayed_post_at
 
         try:
-            # Use session.post with ABSOLUTE URL so mocks match exactly
-            r = canvas.session.post(abs_endpoint, json=payload)  # type: ignore[attr-defined]
-
-            # Try to extract id from JSON body
-            new_id = None
-            try:
-                body = r.json()  # requests_mock supports .json()
-                if isinstance(body, dict):
-                    new_id = body.get("id")
-            except Exception:
-                pass
-
-            # If no id, try following Location header (don't isinstance-check headers)
-            if not new_id:
-                loc = getattr(r, "headers", {}).get("Location")
-                if loc:
-                    follow = canvas.session.get(loc)  # type: ignore[attr-defined]
-                    follow.raise_for_status()
-                    try:
-                        fbody = follow.json()
-                        if isinstance(fbody, dict):
-                            new_id = fbody.get("id")
-                    except Exception:
-                        new_id = None
-
-            if not new_id:
-                detail = None
-                try:
-                    detail = r.text[:200]
-                except Exception:
+            if update_mode:
+                src_id = meta.get("id")
+                if not isinstance(src_id, int):
+                    raise RuntimeError("Missing discussion id for update")
+                abs_update = f"{abs_endpoint}/{src_id}"
+                r = canvas.session.put(abs_update, json=payload)  # type: ignore[attr-defined]
+                status = getattr(r, "status_code", None)
+                if status and status >= 400:
                     detail = None
-                log.error(
-                    "failed-create (no id) title=%s status=%s detail=%s",
-                    title,
-                    getattr(r, "status_code", "?"),
-                    detail,
-                )
-                failed += 1
-                continue
+                    try:
+                        detail = r.text[:200]
+                    except Exception:
+                        detail = None
+                    raise RuntimeError(f"Canvas responded {status}: {detail}")
+                imported += 1
+                id_map["discussions"][src_id] = int(src_id)
+            else:
+                # Use session.post with ABSOLUTE URL so mocks match exactly
+                r = canvas.session.post(abs_endpoint, json=payload)  # type: ignore[attr-defined]
 
-            imported += 1
-            src_id = meta.get("id")
-            if isinstance(src_id, int):
-                id_map["discussions"][src_id] = int(new_id)
+                # Try to extract id from JSON body
+                new_id = None
+                try:
+                    body = r.json()  # requests_mock supports .json()
+                    if isinstance(body, dict):
+                        new_id = body.get("id")
+                except Exception:
+                    pass
+
+                # If no id, try following Location header (don't isinstance-check headers)
+                if not new_id:
+                    loc = getattr(r, "headers", {}).get("Location")
+                    if loc:
+                        follow = canvas.session.get(loc)  # type: ignore[attr-defined]
+                        follow.raise_for_status()
+                        try:
+                            fbody = follow.json()
+                            if isinstance(fbody, dict):
+                                new_id = fbody.get("id")
+                        except Exception:
+                            new_id = None
+
+                if not new_id:
+                    detail = None
+                    try:
+                        detail = r.text[:200]
+                    except Exception:
+                        detail = None
+                    log.error(
+                        "failed-create (no id) title=%s status=%s detail=%s",
+                        title,
+                        getattr(r, "status_code", "?"),
+                        detail,
+                    )
+                    failed += 1
+                    continue
+
+                imported += 1
+                src_id = meta.get("id")
+                if isinstance(src_id, int):
+                    id_map["discussions"][src_id] = int(new_id)
 
         except Exception as e:
             failed += 1

@@ -155,6 +155,7 @@ def import_course(
     integration_id: Optional[str] = None,
     sis_import_id: Optional[str] = None,
     target_account_id: Optional[int] = None,
+    update_mode: bool = False,
 ) -> Dict[str, Any]:
     """
     Programmatic aggregator for the whole import pipeline.
@@ -185,10 +186,22 @@ def import_course(
 
     log.info("Starting import (programmatic) steps=%s export_root=%s", ",".join(steps), export_root)
 
+    update_steps = {"pages", "assignments", "discussions"}
+
     for step in steps:
         try:
+            if update_mode and step not in update_steps:
+                log.info("Skipping step '%s' in update mode", step)
+                continue
+
             if step == "pages":
-                import_pages(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
+                import_pages(
+                    target_course_id=target_course_id,
+                    export_root=export_root,
+                    canvas=canvas,
+                    id_map=id_map,
+                    update_mode=update_mode,
+                )
                 save_id_map(id_map_path, id_map)
 
             elif step == "assignment_groups":
@@ -201,7 +214,13 @@ def import_course(
                 save_id_map(id_map_path, id_map)
 
             elif step == "assignments":
-                import_assignments(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
+                import_assignments(
+                    target_course_id=target_course_id,
+                    export_root=export_root,
+                    canvas=canvas,
+                    id_map=id_map,
+                    update_mode=update_mode,
+                )
                 save_id_map(id_map_path, id_map)
 
             elif step == "quizzes":
@@ -214,7 +233,13 @@ def import_course(
                 save_id_map(id_map_path, id_map)
 
             elif step == "discussions":
-                import_discussions(target_course_id=target_course_id, export_root=export_root, canvas=canvas, id_map=id_map)
+                import_discussions(
+                    target_course_id=target_course_id,
+                    export_root=export_root,
+                    canvas=canvas,
+                    id_map=id_map,
+                    update_mode=update_mode,
+                )
                 save_id_map(id_map_path, id_map)
 
             elif step == "announcements":
