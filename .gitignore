@@ -91,7 +91,7 @@ docs/exported_course_ids.txt
 
 # import logs
 docs/import*
-
+logs/*
 
 # Scratch state
 id_map.json
