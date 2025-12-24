@@ -186,7 +186,7 @@ def import_pages(
         src_id = _coerce_int(meta.get("id"))
 
         # One-time warning about 'position' (Canvas ignores it on create)
-        if not _WARNED_PAGE_POSITION and "position" in meta:
+        if not update_mode and not _WARNED_PAGE_POSITION and "position" in meta:
             log.warning("position-field-ignored: Canvas ignores page 'position' on create")
             _WARNED_PAGE_POSITION = True
 
@@ -223,15 +223,13 @@ def import_pages(
                     getattr(resp, "status_code", "?"),
                     time.time() - start_time,
                 )
-                body = _resp_json(resp)
+                status = getattr(resp, "status_code", None)
+                if status and status >= 400:
+                    raise RuntimeError(f"Canvas responded {status} for page update")
             except Exception as e:
                 log.error("page update failed title=%r slug=%s err=%s", title, slug, e)
                 failed += 1
                 continue
-
-            updated_slug = body.get("url") if isinstance(body, dict) else None
-            if isinstance(updated_slug, str) and updated_slug:
-                slug = updated_slug
 
             imported += 1
             if src_id is not None:
