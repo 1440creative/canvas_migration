@@ -62,11 +62,8 @@ Thumbs.db
 # Project-specific
 # ─────────────────────────────────────────────────────────────────────────────
 # Exported course data
-export/data/
-export/test_data/
-export/batch_test_data/
+/export/
 sandbox_export/
-export/*_batch_test/
 
 # Zip bundles for sharing
 *.zip
