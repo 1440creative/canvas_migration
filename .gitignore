@@ -76,6 +76,7 @@ tmp_test_root/
 docs/gpt_context.md
 docs/working_*.md
 docs/_gpt_chat/*
+docs/codex_tasks/
 docs/structure/*
 docs/data/*
 

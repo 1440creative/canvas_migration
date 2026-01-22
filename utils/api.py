@@ -239,6 +239,58 @@ class CanvasAPI:
                 return url_part[url_part.find("<") + 1 : url_part.find(">")]
         return None
 
+
+def list_blueprint_course_ids(
+    api: "CanvasAPI",
+    *,
+    account_id: Optional[int] = None,
+    include_settings_fallback: bool = True,
+) -> List[int]:
+    """
+    Return blueprint course IDs from Canvas.
+
+    Uses the blueprint filter when available and falls back to per-course settings
+    checks if the list endpoint does not expose blueprint flags.
+    """
+    endpoint = f"/accounts/{account_id}/courses" if account_id is not None else "/courses"
+    params: Dict[str, Any] = {"blueprint": "true"}
+    courses = api.get(endpoint, params=params)
+    if not isinstance(courses, list):
+        return []
+
+    ids: List[int] = []
+    unchecked: List[int] = []
+    for course in courses:
+        if not isinstance(course, dict):
+            continue
+        cid = course.get("id")
+        if cid is None:
+            continue
+        try:
+            cid_int = int(cid)
+        except (TypeError, ValueError):
+            continue
+
+        is_blueprint = course.get("blueprint")
+        if is_blueprint is None:
+            is_blueprint = course.get("is_blueprint")
+
+        if is_blueprint is True:
+            ids.append(cid_int)
+        else:
+            unchecked.append(cid_int)
+
+    if include_settings_fallback and unchecked:
+        for cid in unchecked:
+            try:
+                settings = api.get(f"/courses/{cid}/settings")
+            except Exception:
+                continue
+            if isinstance(settings, dict) and settings.get("blueprint") is True:
+                ids.append(int(cid))
+
+    return sorted(set(ids))
+
     def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
         """
         Perform a multipart/form-data POST (used for Canvas file uploads).
@@ -309,6 +361,7 @@ __all__ = [
     "DEFAULT_PER_PAGE",
     "USER_AGENT",
     "API_PREFIX",
+    "list_blueprint_course_ids",
     "source_api",
     "target_api",
 ]

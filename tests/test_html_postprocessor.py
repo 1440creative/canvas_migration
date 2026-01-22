@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from utils.html_postprocessor import postprocess_html
+from utils.html_postprocessor import postprocess_html, replace_anchor_href
 
 
 def _write(path: Path, content: str) -> None:
@@ -87,3 +87,35 @@ def test_postprocess_html_no_changes(tmp_path):
 
     assert report.rewrites_applied == 0
     assert html_path.read_text(encoding="utf-8") == "<p>No Canvas links here</p>"
+
+
+def test_replace_anchor_href_exact_match():
+    html = (
+        '<p>'
+        '<a href="https://community.canvaslms.com/docs/DOC-10701">Old</a>'
+        '<a href="https://example.com/other">Other</a>'
+        "</p>"
+    )
+    updated, count = replace_anchor_href(
+        html,
+        target_href="https://community.canvaslms.com/docs/DOC-10701",
+        replacement_href="https://community.instructure.com/en/kb/canvas-lms-student-guide",
+    )
+
+    assert count == 1
+    assert "community.instructure.com/en/kb/canvas-lms-student-guide" in updated
+    assert "https://example.com/other" in updated
+    assert "<html" not in updated
+    assert "<body" not in updated
+
+
+def test_replace_anchor_href_no_changes():
+    html = "<div>No links here</div>"
+    updated, count = replace_anchor_href(
+        html,
+        target_href="https://community.canvaslms.com/docs/DOC-10701",
+        replacement_href="https://community.instructure.com/en/kb/canvas-lms-student-guide",
+    )
+
+    assert count == 0
+    assert updated == html

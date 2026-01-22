@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from bs4 import BeautifulSoup
 
 from importers.import_course import rewrite_canvas_links
 
@@ -55,6 +57,41 @@ def _html_candidates(export_root: Path) -> Iterable[Path]:
     for path in export_root.rglob("*.html"):
         if path.is_file():
             yield path
+
+
+def _serialize_html_fragment(soup: BeautifulSoup) -> str:
+    """
+    Serialize soup without adding <html>/<body> wrappers for fragments.
+    """
+    if soup.body:
+        return "".join(str(child) for child in soup.body.contents)
+    return str(soup)
+
+
+def replace_anchor_href(
+    html: str,
+    *,
+    target_href: str,
+    replacement_href: str,
+) -> Tuple[str, int]:
+    """
+    Replace exact-match <a href="..."> links and return (new_html, replacements).
+    """
+    if not html or target_href == replacement_href:
+        return html, 0
+
+    soup = BeautifulSoup(html, "html.parser")
+    changed = 0
+    for anchor in soup.find_all("a"):
+        href = anchor.get("href")
+        if href == target_href:
+            anchor["href"] = replacement_href
+            changed += 1
+
+    if changed == 0:
+        return html, 0
+
+    return _serialize_html_fragment(soup), changed
 
 
 def postprocess_html(
@@ -132,4 +169,5 @@ __all__ = [
     "HtmlPostprocessReport",
     "MissingSourceCourseIdError",
     "postprocess_html",
+    "replace_anchor_href",
 ]
