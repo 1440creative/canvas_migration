@@ -90,6 +90,7 @@ docs/exported_course_ids.txt
 # import logs
 docs/import*
 logs/*
+logs/reports/s_and_r/
 
 # Scratch state
 id_map.json
