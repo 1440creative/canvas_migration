@@ -22,7 +22,7 @@ CSV_COLUMNS = [
     "entry_id",
     "user_id",
     "user_name",
-    "message_preview",
+    "message",
     "created_at",
 ]
 
@@ -157,7 +157,7 @@ def search_and_export(
             # -- CSV rows --
             if entries:
                 for e in entries:
-                    msg = (e.get("message") or "")[:200]
+                    msg = e.get("message") or ""
                     csv_rows.append({
                         "course_id": course_id,
                         "course_name": course_name,
@@ -167,7 +167,7 @@ def search_and_export(
                         "entry_id": e.get("id", ""),
                         "user_id": e.get("user_id", ""),
                         "user_name": e.get("user_name", ""),
-                        "message_preview": msg,
+                        "message": msg,
                         "created_at": e.get("created_at", ""),
                     })
             else:
@@ -180,7 +180,7 @@ def search_and_export(
                     "entry_id": "",
                     "user_id": "",
                     "user_name": "",
-                    "message_preview": "",
+                    "message": "",
                     "created_at": "",
                 })
 

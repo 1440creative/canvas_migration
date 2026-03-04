@@ -64,6 +64,7 @@ Thumbs.db
 # Exported course data (keep .py source, ignore generated data)
 /export/data/
 /export/print/
+/export/docx/
 sandbox_export/
 
 # Zip bundles for sharing
