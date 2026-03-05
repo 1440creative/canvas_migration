@@ -23,6 +23,42 @@ POLL_INTERVAL = 2       # seconds between status polls
 POLL_TIMEOUT  = 300     # max seconds to wait per quiz
 
 
+def _quiz_url(api, path: str) -> str:
+    """
+    Build a New Quizzes API URL from the host root.
+
+    The standard CanvasAPI._full_url() always prepends /api/v1, but New Quizzes
+    uses /api/quiz/v1/... — a different prefix. We construct the URL ourselves
+    from api.base_url (the bare host, e.g. https://sfu.instructure.com/).
+    """
+    return api.base_url.rstrip("/") + "/" + path.lstrip("/")
+
+
+def _quiz_get(api, path: str) -> Any:
+    """GET a New Quizzes API endpoint with transparent pagination."""
+    import requests as _requests
+    url = _quiz_url(api, path)
+    results = []
+    params: dict = {"per_page": 100}
+    while url:
+        r = api._request("GET", url, params=params)
+        params = {}  # only send on first page
+        data = r.json()
+        if isinstance(data, list):
+            results.extend(data)
+            # Follow Link: rel=next header
+            url = api._next_link(r.headers)
+        else:
+            return data
+    return results
+
+
+def _quiz_post(api, path: str) -> Any:
+    """POST to a New Quizzes API endpoint and return the response object."""
+    url = _quiz_url(api, path)
+    return api._request("POST", url)
+
+
 def _load_assignment_slugs(export_dir: Path) -> dict[int, str]:
     """
     Return {canvas_assignment_id: slug} by reading assignment_metadata.json files.
@@ -73,7 +109,7 @@ def export_new_quizzes(
 
     # 1. List all New Quizzes in the course
     log.info("Fetching New Quizzes list for course %s", course_id)
-    quizzes = api.get(f"/api/quiz/v1/courses/{course_id}/quizzes")
+    quizzes = _quiz_get(api, f"/api/quiz/v1/courses/{course_id}/quizzes")
     if not isinstance(quizzes, list):
         log.error("Unexpected response from New Quizzes list endpoint: %r", quizzes)
         return []
@@ -101,8 +137,8 @@ def export_new_quizzes(
 
         # 2. Trigger export
         try:
-            resp = api.post(
-                f"/api/quiz/v1/courses/{course_id}/quizzes/{quiz_id}/submissions/export"
+            resp = _quiz_post(
+                api, f"/api/quiz/v1/courses/{course_id}/quizzes/{quiz_id}/submissions/export"
             )
             resp_data = resp.json()
         except Exception as e:
@@ -123,7 +159,7 @@ def export_new_quizzes(
             time.sleep(POLL_INTERVAL)
             elapsed += POLL_INTERVAL
             try:
-                status = api.get(poll_url)
+                status = _quiz_get(api, poll_url)
             except Exception as e:
                 log.warning("Poll error for quiz %s (job %s): %s", quiz_id, job_id, e)
                 continue
