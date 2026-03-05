@@ -10,11 +10,12 @@ Usage:
     --output-dir canvas_calibrator/reports/
 
 Options:
-  --skip-export     Skip New Quizzes QTI export (use existing zips in quizzes_qti/)
   --skip-fetch      Skip external URL fetching
   --no-pdfs         Skip PDF ingestion
   --rebuild-index   Force re-embed even if cache exists
-  --dry-run         Parse and index only, don't call the Claude API
+  --dry-run         Fetch/index only, don't call the Claude API
+
+Requires CANVAS_TARGET_URL and CANVAS_TARGET_TOKEN (in .env.local).
 """
 from __future__ import annotations
 
@@ -55,11 +56,6 @@ def main() -> int:
         default=Path("canvas_calibrator/reports"),
         help="Directory to write calibration_report.md/.html (default: canvas_calibrator/reports/)",
     )
-    p.add_argument(
-        "--skip-export",
-        action="store_true",
-        help="Skip New Quizzes QTI export; use existing zips in quizzes_qti/",
-    )
     p.add_argument("--skip-fetch", action="store_true", help="Skip external URL fetching")
     p.add_argument("--no-pdfs", action="store_true", help="Skip PDF ingestion")
     p.add_argument("--rebuild-index", action="store_true", help="Force re-embed even if cache exists")
@@ -75,54 +71,24 @@ def main() -> int:
     logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
 
     log = logging.getLogger("calibrator")
-    qti_dir = args.export_dir / "quizzes_qti"
 
-    # --- Step 1: Export New Quizzes QTI zips (unless skipped) ---
-    if not args.skip_export:
-        print(f"[1/5] Exporting New Quizzes QTI zips for course {args.course_id}…")
-        from utils.api import target_api
-        if target_api is None:
-            p.error("CANVAS_TARGET_URL and CANVAS_TARGET_TOKEN must be set for quiz export")
-        from canvas_calibrator.exporters.new_quizzes_exporter import export_new_quizzes
-        zips = export_new_quizzes(
-            course_id=int(args.course_id),
-            export_dir=args.export_dir,
-            api=target_api,
-            output_dir=qti_dir,
-        )
-        print(f"      → {len(zips)} zips exported to {qti_dir}")
-    else:
-        print(f"[1/5] Skipping export (--skip-export)")
+    # --- Step 1: Fetch quiz questions via Items API ---
+    print(f"[1/4] Fetching quiz questions via New Quizzes Items API for course {args.course_id}…")
+    from utils.api import target_api
+    if target_api is None:
+        p.error("CANVAS_TARGET_URL and CANVAS_TARGET_TOKEN must be set")
+    from canvas_calibrator.parsers.items_reader import fetch_quiz_questions
+    all_questions = fetch_quiz_questions(course_id=args.course_id, api=target_api)
 
-    # Collect all zips to process
-    zip_files = sorted(qti_dir.glob("*.zip")) if qti_dir.exists() else []
-    if not zip_files:
-        print(f"ERROR: No zip files found in {qti_dir}. Run without --skip-export first.")
-        return 1
-    print(f"      → {len(zip_files)} zip(s) to process")
-
-    # --- Step 2: Parse all QTI zips ---
-    print(f"[2/5] Parsing {len(zip_files)} QTI zip(s)…")
-    from canvas_calibrator.parsers.qti_parser import parse_qti_zip
-    all_questions: list[dict] = []
-    quiz_titles: list[str] = []
-    for zp in zip_files:
-        try:
-            qs = parse_qti_zip(zp)
-            all_questions.extend(qs)
-            title = qs[0]["quiz_title"] if qs else zp.stem
-            quiz_titles.append(title)
-            print(f"      {zp.name}: {len(qs)} questions  ({title})")
-        except Exception as e:
-            log.error("Failed to parse %s: %s", zp.name, e)
-    print(f"      → {len(all_questions)} total questions across {len(quiz_titles)} quizzes")
+    quiz_titles = list(dict.fromkeys(q["quiz_title"] for q in all_questions))
+    print(f"      → {len(all_questions)} questions across {len(quiz_titles)} quizzes")
 
     if not all_questions:
         print("ERROR: No questions parsed. Aborting.")
         return 1
 
-    # --- Step 3: Load course content ---
-    print(f"[3/5] Loading course content from: {args.export_dir}")
+    # --- Step 2: Load course content ---
+    print(f"[2/4] Loading course content from: {args.export_dir}")
     from canvas_calibrator.ingest.content_loader import load_course_content
     docs = load_course_content(
         args.export_dir,
@@ -131,8 +97,8 @@ def main() -> int:
     )
     print(f"      → {len(docs)} documents loaded")
 
-    # --- Step 4: Chunk + Embed ---
-    print(f"[4/5] Chunking and embedding documents…")
+    # --- Step 3: Chunk + Embed ---
+    print(f"[3/4] Chunking and embedding documents…")
     from canvas_calibrator.rag.chunker import chunk_documents
     chunks = chunk_documents(docs)
     print(f"      → {len(chunks)} chunks created")
@@ -150,11 +116,11 @@ def main() -> int:
     retriever = Retriever(embeddings, indexed_chunks)
 
     if args.dry_run:
-        print("[5/5] DRY RUN — skipping Claude API calls")
+        print("[4/4] DRY RUN — skipping Claude API calls")
     else:
-        print(f"[5/5] Running learner agent ({len(all_questions)} questions across {len(quiz_titles)} quizzes)…")
+        print(f"[4/4] Running learner agent ({len(all_questions)} questions across {len(quiz_titles)} quizzes)…")
 
-    # --- Step 5: Run learner agent ---
+    # --- Step 4: Run learner agent ---
     from canvas_calibrator.agent.learner import run_learner
     results = run_learner(all_questions, retriever, dry_run=args.dry_run)
 
@@ -176,8 +142,8 @@ def main() -> int:
         except Exception:
             pass
 
-    # --- Step 6: Generate report ---
-    print(f"[6/6] Generating report in: {args.output_dir}")
+    # --- Generate report ---
+    print(f"Generating report in: {args.output_dir}")
     report_title = f"{len(quiz_titles)} quiz(zes)"
     from canvas_calibrator.report.generator import generate_report
     md_path, html_path = generate_report(
