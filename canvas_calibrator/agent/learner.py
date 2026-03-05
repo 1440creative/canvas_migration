@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 
 MODEL = "claude-sonnet-4-20250514"
 
+# Pricing for claude-sonnet-4-20250514 ($ per million tokens)
+INPUT_COST_PER_MTOK  = 3.00
+OUTPUT_COST_PER_MTOK = 15.00
+
 SYSTEM_PROMPT = """You are a student who has read only the provided course excerpts.
 Answer the following question using ONLY the provided material.
 Do not use outside knowledge.
@@ -43,6 +47,8 @@ class QuestionResult:
     reasoning: str
     supporting_excerpt: Optional[str]
     retrieved_chunks: list[dict[str, Any]]
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def _normalize(text: str) -> str:
@@ -169,6 +175,9 @@ def run_learner(
                 messages=[{"role": "user", "content": user_message}],
             )
             raw = response.content[0].text
+            usage = response.usage
+            in_tok  = getattr(usage, "input_tokens",  0) or 0
+            out_tok = getattr(usage, "output_tokens", 0) or 0
         except Exception as e:
             log.error("API call failed for question %d: %s", i, e)
             results.append(QuestionResult(
@@ -208,6 +217,8 @@ def run_learner(
             reasoning=reasoning,
             supporting_excerpt=supporting_excerpt,
             retrieved_chunks=retrieved_dicts,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         ))
 
     return results

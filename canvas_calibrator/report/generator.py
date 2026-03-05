@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from canvas_calibrator.agent.learner import QuestionResult
+from canvas_calibrator.agent.learner import QuestionResult, MODEL, INPUT_COST_PER_MTOK, OUTPUT_COST_PER_MTOK
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +75,26 @@ def _build_markdown(
     a(f"")
     a(f"*(% of questions where course material supports the correct answer)*")
     a(f"")
+
+    # Token / cost summary (only if API calls were made)
+    total_in  = sum(r.input_tokens  for r in results)
+    total_out = sum(r.output_tokens for r in results)
+    if total_in or total_out:
+        cost_in  = total_in  / 1_000_000 * INPUT_COST_PER_MTOK
+        cost_out = total_out / 1_000_000 * OUTPUT_COST_PER_MTOK
+        total_cost = cost_in + cost_out
+        a(f"---")
+        a(f"")
+        a(f"## API Usage")
+        a(f"")
+        a(f"| | Tokens | Cost (USD) |")
+        a(f"|---|---:|---:|")
+        a(f"| Input  | {total_in:,} | ${cost_in:.4f} |")
+        a(f"| Output | {total_out:,} | ${cost_out:.4f} |")
+        a(f"| **Total** | **{total_in + total_out:,}** | **${total_cost:.4f}** |")
+        a(f"")
+        a(f"*Model: `{MODEL}` — ${INPUT_COST_PER_MTOK:.2f}/M input · ${OUTPUT_COST_PER_MTOK:.2f}/M output*")
+        a(f"")
 
     # Unsupported
     if unsupported:
