@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import html as html_lib
 import textwrap
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +43,9 @@ def _recommend(result: QuestionResult) -> str:
 def _build_markdown(
     results: list[QuestionResult],
     course_id: str | int,
+    course_code: str,
     quiz_title: str,
+    timestamp: str,
 ) -> str:
     total = len(results)
     correct = [r for r in results if r.verdict == "correct"]
@@ -54,9 +56,9 @@ def _build_markdown(
     lines: list[str] = []
     a = lines.append
 
-    a(f"# Course Calibration Report")
+    a(f"# Course Calibration Report — {course_code}")
     a(f"")
-    a(f"**Course:** {course_id} | **Quiz:** {quiz_title} | **Date:** {date.today()}")
+    a(f"**Course:** {course_id} ({course_code}) | **Quizzes:** {quiz_title} | **Generated:** {timestamp}")
     a(f"")
     a(f"---")
     a(f"")
@@ -243,21 +245,30 @@ def _md_to_html_naive(md: str) -> str:
 def generate_report(
     results: list[QuestionResult],
     course_id: str | int,
+    course_code: str,
     quiz_title: str,
     output_dir: Path,
 ) -> tuple[Path, Path]:
     """
-    Write calibration_report.md and calibration_report.html to output_dir.
+    Write timestamped calibration report files to output_dir.
+
+    Filenames: calibration_{course_code}_{YYYYMMDD-HHMMSS}.md/.html
 
     Returns:
         (md_path, html_path)
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    md_content = _build_markdown(results, course_id, quiz_title)
+    now = datetime.now(timezone.utc)
+    timestamp = now.strftime("%Y-%m-%d %H:%M UTC")
+    file_ts = now.strftime("%Y%m%d-%H%M%S")
+    safe_code = course_code.replace("/", "-").replace(" ", "_")
+
+    md_content = _build_markdown(results, course_id, course_code, quiz_title, timestamp)
     html_content = _md_to_html_naive(md_content)
 
-    md_path = output_dir / "calibration_report.md"
-    html_path = output_dir / "calibration_report.html"
+    stem = f"calibration_{safe_code}_{file_ts}"
+    md_path = output_dir / f"{stem}.md"
+    html_path = output_dir / f"{stem}.html"
 
     md_path.write_text(md_content, encoding="utf-8")
     html_path.write_text(html_content, encoding="utf-8")

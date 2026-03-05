@@ -164,13 +164,26 @@ def main() -> int:
     total = len(results)
     print(f"      → {correct}/{total} correct  |  {wrong} wrong  |  {unsupported} unsupported")
 
+    # Load course code from exported metadata (best-effort)
+    import json
+    course_code = str(args.course_id)
+    meta_file = args.export_dir / "course" / "course_metadata.json"
+    if meta_file.exists():
+        try:
+            course_code = json.loads(meta_file.read_text(encoding="utf-8")).get(
+                "course_code", course_code
+            ) or course_code
+        except Exception:
+            pass
+
     # --- Step 6: Generate report ---
     print(f"[6/6] Generating report in: {args.output_dir}")
-    report_title = f"{len(quiz_titles)} quizzes"
+    report_title = f"{len(quiz_titles)} quiz(zes)"
     from canvas_calibrator.report.generator import generate_report
     md_path, html_path = generate_report(
         results,
         course_id=args.course_id,
+        course_code=course_code,
         quiz_title=report_title,
         output_dir=args.output_dir,
     )
