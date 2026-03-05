@@ -63,6 +63,10 @@ Thumbs.db
 # ─────────────────────────────────────────────────────────────────────────────
 # Exported course data
 /export/
+
+# canvas_calibrator generated outputs and cache
+canvas_calibrator/reports/
+canvas_calibrator/.cache/
 sandbox_export/
 
 # Zip bundles for sharing
