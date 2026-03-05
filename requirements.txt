@@ -1,2 +1,10 @@
 requests>=2.31
 beautifulsoup4>=4.12
+
+# canvas_calibrator dependencies
+anthropic>=0.40
+sentence-transformers>=3.0
+numpy>=1.26
+pypdf>=4.0
+trafilatura>=1.12
+tiktoken>=0.7
