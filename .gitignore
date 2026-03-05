@@ -67,6 +67,7 @@ Thumbs.db
 # canvas_calibrator generated outputs and cache
 canvas_calibrator/reports/
 canvas_calibrator/.cache/
+export/data/cloud/
 sandbox_export/
 
 # Zip bundles for sharing

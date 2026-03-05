@@ -11,6 +11,9 @@ QTI zip layout:
   {hash}/
     {hash}.xml            (question items)
     assessment_meta.xml   (quiz title)
+
+Note: the hash directory may have a leading 'g' prefix (e.g. g54e8a1bd4...).
+The questions XML filename matches its parent directory name exactly.
 """
 from __future__ import annotations
 
@@ -44,11 +47,10 @@ def _strip_html(html: str) -> str:
     return p.get_text()
 
 
-# UUID pattern used as [uuid] placeholders in FIMB stems
-_UUID_RE = re.compile(
-    r"\[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]",
-    re.IGNORECASE,
-)
+def _extract_li_items(html: str) -> list[str]:
+    """Return plain-text content of each <li> in html (non-nested)."""
+    items = re.findall(r"<li[^>]*>(.*?)</li>", html, re.DOTALL | re.IGNORECASE)
+    return [_strip_html(item).strip() for item in items]
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +66,7 @@ def _tag(elem: ET.Element) -> str:
 
 
 def _find(elem: ET.Element, *path: str) -> ET.Element | None:
-    """Namespace-agnostic find via iteration."""
+    """Namespace-agnostic single-level find via direct children."""
     cur: ET.Element | None = elem
     for part in path:
         if cur is None:
@@ -78,17 +80,21 @@ def _findall(elem: ET.Element, tag: str) -> list[ET.Element]:
 
 
 # ---------------------------------------------------------------------------
-# Quiz title from assessment_meta.xml
+# Quiz title
 # ---------------------------------------------------------------------------
 
 def _parse_quiz_title(tree: ET.ElementTree) -> str:
     root = tree.getroot()
-    # <title> or <assessment title="...">
+    # Try <assessment title="..."> attribute first (present in real zips)
+    for elem in root.iter():
+        if _tag(elem) == "assessment":
+            t = elem.get("title", "").strip()
+            if t:
+                return t
+    # Fallback: <title> element
     title_elem = next((c for c in root.iter() if _tag(c) == "title"), None)
     if title_elem is not None and title_elem.text:
         return title_elem.text.strip()
-    if root.get("title"):
-        return root.get("title", "").strip()
     return "Unknown Quiz"
 
 
@@ -99,11 +105,12 @@ def _parse_quiz_title(tree: ET.ElementTree) -> str:
 def _correct_idents(item: ET.Element) -> dict[str, str]:
     """
     Return {response_ident: correct_answer_ident} from <resprocessing>.
-    Works for both MC/TF (single resprocessing) and FIMB (one per response_lid).
+
+    Accepts both action="Set" and action="Add" — any positive setvar value
+    is treated as a correct-answer marker (New Quizzes uses action="Add").
     """
     mapping: dict[str, str] = {}
     for respcondition in _findall(item, "respcondition"):
-        # Only look at conditions with setvar action="Set" value > 0 (correct)
         setvar = next(
             (c for c in respcondition.iter() if _tag(c) == "setvar"), None
         )
@@ -115,7 +122,6 @@ def _correct_idents(item: ET.Element) -> dict[str, str]:
             val = 0.0
         if val <= 0:
             continue
-        # Find conditionvar > varequal
         varequal = next(
             (c for c in respcondition.iter() if _tag(c) == "varequal"), None
         )
@@ -129,7 +135,7 @@ def _correct_idents(item: ET.Element) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Answer text lookup from <response_lid> / <response_str>
+# Answer text lookup
 # ---------------------------------------------------------------------------
 
 def _choice_texts(response_lid: ET.Element) -> dict[str, str]:
@@ -137,7 +143,6 @@ def _choice_texts(response_lid: ET.Element) -> dict[str, str]:
     result: dict[str, str] = {}
     for label in _findall(response_lid, "response_label"):
         ident = label.get("ident", "")
-        # text may be in <material><mattext>
         mattext = next(
             (c for c in label.iter() if _tag(c) == "mattext"), None
         )
@@ -148,17 +153,26 @@ def _choice_texts(response_lid: ET.Element) -> dict[str, str]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Stem extraction — direct path: presentation > material > mattext
+# ---------------------------------------------------------------------------
+
 def _stem_html(item: ET.Element) -> str:
-    """Extract the stem HTML from <presentation><material><mattext>."""
+    """
+    Extract stem HTML from <presentation><material><mattext>.
+
+    Uses a direct child-walk rather than iter() to avoid picking up
+    mattext nodes from nested <response_lid> elements.
+    """
     presentation = _find(item, "presentation")
     if presentation is None:
         return ""
-    for mattext in _findall(presentation, "mattext"):
-        parent_tags = {_tag(p) for p in item.iter()}
-        # Grab the first mattext that is directly under material (not inside response_label)
-        text = mattext.text or ""
-        if text.strip():
-            return text
+    material = _find(presentation, "material")
+    if material is None:
+        return ""
+    mattext = _find(material, "mattext")
+    if mattext is not None and mattext.text:
+        return mattext.text
     return ""
 
 
@@ -180,7 +194,6 @@ def _parse_multiple_choice(
     stem = _stem_plain(item)
     correct_map = _correct_idents(item)
 
-    # Find the single response_lid
     response_lids = _findall(item, "response_lid")
     choices: list[str] = []
     correct_answer = ""
@@ -214,46 +227,57 @@ def _parse_fill_in_blanks(
     """
     Emit one question dict per blank.
 
-    The stem HTML contains [uuid] placeholders. For each response_lid:
-      - Replace that uuid in the stem with ___ to get the definition sentence.
-      - The word bank = all choices across all response_lids (union, deduped).
+    Stem HTML contains [uuid] placeholders (without 'response_' prefix).
+    response_lid idents are 'response_{uuid}'.
+
+    For each blank:
+      - Strip 'response_' prefix from ident to get the uuid.
+      - Find the <li> in the stem that contains [{uuid}].
+      - Extract that sentence as the definition, replacing [{uuid}] with ___.
+    Word bank = all choices across all blanks (shared pool).
     """
     stem_html = _stem_html(item)
+    stem_plain = _strip_html(stem_html)
     correct_map = _correct_idents(item)
     response_lids = _findall(item, "response_lid")
 
-    # Build word bank: union of all choices across all blanks
-    word_bank_map: dict[str, str] = {}  # ident -> text
+    # Build word bank: union of all choices (all blanks share the same pool)
+    word_bank_map: dict[str, str] = {}
     for rl in response_lids:
         word_bank_map.update(_choice_texts(rl))
     word_bank = list(word_bank_map.values())
 
+    # Pre-extract <li> sentences from stem HTML for definition lookup
+    li_items = _extract_li_items(stem_html)
+
     results: list[dict[str, Any]] = []
     for offset, rl in enumerate(response_lids):
-        resp_ident = rl.get("ident", "")
+        resp_ident = rl.get("ident", "")  # e.g. "response_b7230ac9-..."
+
+        # Strip 'response_' prefix to get the bare uuid used in stem placeholders
+        uuid = resp_ident.removeprefix("response_")
+
         choice_map = _choice_texts(rl)
         correct_ident = correct_map.get(resp_ident, "")
         correct_answer = choice_map.get(correct_ident, "")
 
-        # Build definition: replace THIS blank's uuid with ___, strip others
-        def_html = stem_html
-        for other_rl in response_lids:
-            other_ident = other_rl.get("ident", "")
-            if other_ident == resp_ident:
-                def_html = def_html.replace(f"[{resp_ident}]", "___")
-            else:
-                # Replace other blanks with their correct answer text for context
-                other_correct_ident = correct_map.get(other_ident, "")
-                other_text = _choice_texts(other_rl).get(other_correct_ident, f"[{other_ident}]")
-                def_html = def_html.replace(f"[{other_ident}]", other_text)
+        # Find the <li> that contains this blank's [uuid] placeholder
+        placeholder = f"[{uuid}]"
+        definition = ""
+        for li_text in li_items:
+            if placeholder in li_text:
+                definition = li_text.replace(placeholder, "___")
+                break
 
-        definition = _strip_html(def_html)
+        # Fallback: replace placeholder in full stem plain text
+        if not definition:
+            definition = stem_plain.replace(placeholder, "___")
 
         results.append({
             "quiz_title": quiz_title,
             "question_index": base_index + offset,
             "question_type": "fill_in_blank",
-            "stem": _strip_html(stem_html),
+            "stem": stem_plain,
             "definition": definition,
             "correct_answer": correct_answer,
             "choices": word_bank,
@@ -272,6 +296,8 @@ def parse_qti_zip(zip_path: str | Path) -> list[dict[str, Any]]:
     Parse a New Quizzes QTI zip.
 
     Returns a list of question dicts ordered by their position in the quiz.
+    The zip structure is auto-detected: the questions XML is the file whose
+    basename (without .xml) matches its parent directory name.
     """
     zip_path = Path(zip_path)
     source_zip = zip_path.name
@@ -279,16 +305,13 @@ def parse_qti_zip(zip_path: str | Path) -> list[dict[str, Any]]:
     with zipfile.ZipFile(zip_path) as zf:
         names = zf.namelist()
 
-        # Detect hash directory dynamically
-        # Structure: {hash}/{hash}.xml  and  {hash}/assessment_meta.xml
-        hash_dir = ""
         questions_xml = ""
         meta_xml = ""
         for name in names:
             parts = name.split("/")
-            if len(parts) == 2 and parts[1].endswith(".xml") and parts[1] != "assessment_meta.xml":
-                if parts[0] == parts[1].replace(".xml", ""):
-                    hash_dir = parts[0]
+            if len(parts) == 2 and parts[1].endswith(".xml"):
+                stem = parts[1][:-4]  # strip .xml
+                if stem == parts[0]:  # filename matches directory name
                     questions_xml = name
             if name.endswith("assessment_meta.xml"):
                 meta_xml = name
@@ -296,41 +319,28 @@ def parse_qti_zip(zip_path: str | Path) -> list[dict[str, Any]]:
         if not questions_xml:
             raise ValueError(f"Could not locate questions XML in {zip_path.name}")
 
-        # Parse quiz title
+        # Parse quiz title from assessment_meta.xml
         quiz_title = "Unknown Quiz"
         if meta_xml:
             with zf.open(meta_xml) as f:
                 try:
-                    meta_tree = ET.parse(f)
-                    quiz_title = _parse_quiz_title(meta_tree)
+                    quiz_title = _parse_quiz_title(ET.parse(f))
                 except ET.ParseError:
                     pass
 
-        # Parse questions
+        # Parse questions XML
         with zf.open(questions_xml) as f:
             tree = ET.parse(f)
 
     root = tree.getroot()
-
-    # Collect all <item> elements
     items = _findall(root, "item")
 
     questions: list[dict[str, Any]] = []
     question_index = 0
 
     for item in items:
-        # Determine question type from <fieldlabel>question_type</fieldlabel>
+        # Read question_type from <itemmetadata><qtimetadata><qtimetadatafield>
         qtype_raw = ""
-        for field in _findall(item, "fieldentry"):
-            parent = next(
-                (
-                    p for p in root.iter()
-                    if any(_tag(c) == "fieldentry" and c is field for c in p)
-                ),
-                None,
-            )
-            # Simpler: find fieldlabel sibling
-        # Walk itemmetadata
         for qtmd in _findall(item, "qtimetadatafield"):
             label = next((c for c in qtmd if _tag(c) == "fieldlabel"), None)
             entry = next((c for c in qtmd if _tag(c) == "fieldentry"), None)
@@ -340,8 +350,9 @@ def parse_qti_zip(zip_path: str | Path) -> list[dict[str, Any]]:
 
         if qtype_raw in ("multiple_choice_question", "true_false_question"):
             qtype = "true_false" if qtype_raw == "true_false_question" else "multiple_choice"
-            q = _parse_multiple_choice(item, quiz_title, question_index, source_zip, qtype)
-            questions.append(q)
+            questions.append(
+                _parse_multiple_choice(item, quiz_title, question_index, source_zip, qtype)
+            )
             question_index += 1
 
         elif qtype_raw == "fill_in_multiple_blanks_question":
@@ -349,6 +360,6 @@ def parse_qti_zip(zip_path: str | Path) -> list[dict[str, Any]]:
             questions.extend(blanks)
             question_index += len(blanks)
 
-        # Unknown types are skipped
+        # Unknown types are silently skipped
 
     return questions
