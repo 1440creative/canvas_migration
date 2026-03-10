@@ -51,9 +51,9 @@ class QuestionResult:
     output_tokens: int = 0
 
 
-def _normalize(text: str) -> str:
+def _normalize(text) -> str:
     """Lowercase, strip punctuation for comparison."""
-    return text.lower().translate(str.maketrans("", "", string.punctuation)).strip()
+    return (text or "").lower().translate(str.maketrans("", "", string.punctuation)).strip()
 
 
 def _build_user_message(question: dict[str, Any], chunks: list[RetrievedChunk]) -> str:
@@ -115,9 +115,9 @@ def run_learner(
     Returns:
         list of QuestionResult
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
     if not api_key and not dry_run:
-        raise EnvironmentError("ANTHROPIC_API_KEY environment variable not set")
+        raise EnvironmentError("ANTHROPIC_API_KEY (or CLAUDE_API_KEY) environment variable not set")
 
     client = None
     if not dry_run:
@@ -193,7 +193,7 @@ def run_learner(
             continue
 
         parsed = _parse_agent_response(raw)
-        agent_answer = parsed.get("chosen_answer", "")
+        agent_answer = parsed.get("chosen_answer") or ""
         confidence = parsed.get("confidence", "low")
         found_in_material = bool(parsed.get("found_in_material", False))
         reasoning = parsed.get("reasoning", "")
