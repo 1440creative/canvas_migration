@@ -47,6 +47,7 @@ REPORTS_DIR = Path(__file__).resolve().parents[1] / "logs" / "reports" / "announ
 
 
 class CanvasLike(Protocol):
+    def get(self, endpoint: str, **kwargs) -> Any: ...
     def post(self, endpoint: str, **kwargs) -> Any: ...
 
 
@@ -100,6 +101,51 @@ def send_announcements(
             log.error("Failed course=%s: %s", selector, exc)
 
     return counters
+
+
+def _resolve_selectors(
+    selectors: List[str],
+    canvas: CanvasLike,
+    log: logging.Logger,
+    account_id: int = 1,
+) -> tuple[List[str], int]:
+    """
+    Resolve sis_course_id: selectors to numeric course IDs by searching the
+    accounts courses endpoint with the SIS ID as the search term, then matching
+    on a course whose name starts with that ID.
+    Numeric selectors pass through unchanged.
+    Returns (resolved_selectors, n_failed).
+    """
+    resolved = []
+    failed = 0
+    for selector in selectors:
+        if not selector.startswith("sis_course_id:"):
+            resolved.append(selector)
+            continue
+        sis_id = selector[len("sis_course_id:"):]
+        try:
+            results = canvas.get(
+                f"/api/v1/accounts/{account_id}/courses",
+                params={"search_term": sis_id, "per_page": 10},
+            )
+            match = None
+            if isinstance(results, list):
+                match = next(
+                    (c for c in results
+                     if isinstance(c, dict) and c.get("name", "").startswith(sis_id)),
+                    None,
+                )
+            if match and match.get("id"):
+                course_id = str(match["id"])
+                log.debug("Resolved %s -> course_id %s (%s)", sis_id, course_id, match.get("name"))
+                resolved.append(course_id)
+            else:
+                log.error("Could not resolve %s: no course found matching that name", sis_id)
+                failed += 1
+        except Exception as exc:
+            log.error("Could not resolve %s: %s", sis_id, exc)
+            failed += 1
+    return resolved, failed
 
 
 def _load_from_manifest(path: str) -> List[str]:
@@ -202,7 +248,12 @@ def _parse_args() -> argparse.Namespace:
         "--delayed-post-at", metavar="DATETIME",
         help="ISO 8601 datetime to schedule the announcement (e.g. 2026-09-01T09:00:00Z)",
     )
+    p.add_argument(
+        "--account-id", type=int, default=1, metavar="ID",
+        help="Canvas account ID used when resolving SIS IDs by course name search (default: 1)",
+    )
     p.add_argument("--dry-run", action="store_true", help="Log what would be posted without making API calls")
+    p.add_argument("--preview", action="store_true", help="Print the announcement title and full HTML body before running (use with --dry-run to verify content)")
     p.add_argument("-v", "--verbose", action="count", default=1)
 
     return p.parse_args()
@@ -243,7 +294,20 @@ def main() -> int:
         return 2
 
     course_selectors = _load_course_selectors(args)
+    original_count = len(course_selectors)
     message = _load_message(args)
+
+    resolve_failed = 0
+    if not args.dry_run:
+        log.info("Resolving %d SIS ID(s) to Canvas course IDs...", original_count)
+        course_selectors, resolve_failed = _resolve_selectors(course_selectors, target_api, log, account_id=args.account_id)
+        log.info("Resolved %d course(s); %d failed to resolve", len(course_selectors), resolve_failed)
+
+    if args.preview:
+        print("-" * 60)
+        print(f"TITLE:   {args.title}")
+        print(f"MESSAGE:\n{message}")
+        print("-" * 60)
 
     log.info(
         "Sending announcement %r to %d course(s)%s",
@@ -260,6 +324,8 @@ def main() -> int:
         delayed_post_at=args.delayed_post_at,
         dry_run=args.dry_run,
     )
+    counters["failed"] += resolve_failed
+    counters["total"] = original_count
 
     summary = (
         f"Done. sent={counters['sent']} failed={counters['failed']} total={counters['total']}"
