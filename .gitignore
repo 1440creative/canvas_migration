@@ -65,6 +65,9 @@ Thumbs.db
 /export/
 sandbox_export/
 
+# Generated website content (CSVs tracked, built sites are not)
+/websites/*/
+
 # Zip bundles for sharing
 *.zip
 

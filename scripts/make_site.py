@@ -359,8 +359,9 @@ def _process_html(raw_html: str, file_id_map: dict[int, Path],
         else:
             img.decompose()
 
-        for attr in ["data-api-endpoint", "data-api-returntype", "loading", "verifier"]:
-            del img[attr]
+        if img.attrs:
+            for attr in ["data-api-endpoint", "data-api-returntype", "loading", "verifier"]:
+                img.attrs.pop(attr, None)
 
     # Rewrite internal Canvas page links to local .html files
     for a in content.find_all("a", href=True):
@@ -469,15 +470,19 @@ def _build_sidebar(modules_with_pages: list[dict], current_slug: str) -> str:
 # Main builder
 # ---------------------------------------------------------------------------
 
-def build_site(course_dir: Path, out_dir: Path) -> None:
+def build_site(course_dir: Path, out_dir: Path,
+               module_positions: set[int] | None = None,
+               title_override: str | None = None,
+               include_unpublished: bool = False,
+               exclude_titles: set[str] | None = None) -> None:
     t0 = time.perf_counter()
 
     meta: dict = _read_json(course_dir / "course" / "course_metadata.json") or {}
-    course_name = meta.get("name") or course_dir.name
+    course_name = title_override or meta.get("name") or course_dir.name
 
     modules_data: list = _read_json(course_dir / "modules" / "modules.json") or []
     if not modules_data:
-        sys.exit(f"No modules found in {course_dir}")
+        raise RuntimeError(f"No modules found in {course_dir}")
 
     file_id_map = _build_file_id_map(course_dir)
 
@@ -495,12 +500,20 @@ def build_site(course_dir: Path, out_dir: Path) -> None:
     if token:
         session.headers["Authorization"] = f"Bearer {token}"
 
-    # Collect ordered pages across all modules
+    # Collect ordered pages across all modules (optionally filtered by position)
     ordered_pages: list[dict] = []
     modules_with_pages: list[dict] = []
 
-    for mod in modules_data:
-        mod_title = mod.get("name") or f"Module {mod.get('position', '')}"
+    # Build the published-only list first so position filter is 1-based within that set
+    published_mods = [
+        m for m in modules_data
+        if include_unpublished or m.get("published") is not False
+    ]
+
+    for published_index, mod in enumerate(published_mods, start=1):
+        if module_positions and published_index not in module_positions:
+            continue
+        mod_title = mod.get("name") or f"Module {published_index}"
         mod_pages = []
         for item in mod.get("items", []):
             if item.get("type") != "Page":
@@ -512,6 +525,8 @@ def build_site(course_dir: Path, out_dir: Path) -> None:
             page_dir = slug_map.get(slug)
             if not page_dir:
                 continue
+            if exclude_titles and title.strip().lower() in {t.lower() for t in exclude_titles}:
+                continue
             filename = f"pages/{_slug_to_filename(slug)}"
             entry = {"slug": slug, "title": title, "page_dir": page_dir, "file": filename}
             ordered_pages.append(entry)
@@ -519,7 +534,7 @@ def build_site(course_dir: Path, out_dir: Path) -> None:
         modules_with_pages.append({"title": mod_title, "pages": mod_pages})
 
     if not ordered_pages:
-        sys.exit("No pages found in module structure.")
+        raise RuntimeError("No pages found in module structure.")
 
     # Create output directories
     pages_out = out_dir / "pages"
@@ -585,6 +600,8 @@ def build_site(course_dir: Path, out_dir: Path) -> None:
 
     elapsed = time.perf_counter() - t0
     print(f"\n  Course:   {course_name}")
+    if module_positions:
+        print(f"  Modules:  {sorted(module_positions)}")
     print(f"  Pages:    {total}")
     print(f"  Output:   {out_dir}")
     print(f"  Time:     {elapsed:.1f}s")
@@ -597,15 +614,38 @@ def main() -> int:
     p.add_argument("--course-dir", type=Path, required=True)
     p.add_argument("--out", type=Path, default=None,
                    help="Output directory (default: <course-dir>/site)")
+    p.add_argument("--modules", default=None,
+                   help="Comma-separated module position numbers to include (e.g. 1,2,3). "
+                        "Omit to include all modules.")
+    p.add_argument("--title", default=None,
+                   help="Override the course title shown in the sidebar and page titles.")
+    p.add_argument("--include-unpublished", action="store_true",
+                   help="Include modules marked published=false (skipped by default).")
+    p.add_argument("--exclude", default=None,
+                   help="Semicolon-separated page titles to omit (e.g. \"Contact Information and Assistance\").")
     args = p.parse_args()
 
     course_dir = args.course_dir.resolve()
     if not course_dir.is_dir():
         p.error(f"Course directory not found: {course_dir}")
 
+    module_positions: set[int] | None = None
+    if args.modules:
+        try:
+            module_positions = {int(n.strip()) for n in args.modules.split(",")}
+        except ValueError:
+            p.error("--modules must be comma-separated integers, e.g. 1,2,3")
+
+    exclude_titles: set[str] | None = None
+    if args.exclude:
+        exclude_titles = {t.strip() for t in args.exclude.split(";") if t.strip()}
+
     out_dir = args.out or (course_dir / "site")
     print(f"Building site for {course_dir.name}...")
-    build_site(course_dir, out_dir)
+    build_site(course_dir, out_dir, module_positions=module_positions,
+               title_override=args.title,
+               include_unpublished=args.include_unpublished,
+               exclude_titles=exclude_titles)
     return 0
 
 
