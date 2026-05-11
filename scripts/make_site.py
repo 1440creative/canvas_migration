@@ -319,6 +319,26 @@ def _fetch_and_copy_image(url: str, images_dir: Path,
     return f"../images/{dest_name}"
 
 
+def _clean_filename(name: str) -> str:
+    # Strip leading Canvas timestamp/id prefix: e.g. "1644356533_374__foo.pdf" → "foo.pdf"
+    return re.sub(r"^\d+_\d+__", "", name)
+
+
+def _copy_local_file(src_path: Path, files_dir: Path) -> str:
+    clean = _clean_filename(src_path.name)
+    dest = files_dir / clean
+    if dest.exists() and dest.read_bytes() == src_path.read_bytes():
+        return f"../files/{clean}"
+    # Avoid collision: prefix with file id from filename if dest is already taken by different content
+    if dest.exists():
+        prefix = re.match(r"^(\d+_\d+)__", src_path.name)
+        clean = f"{prefix.group(1)}__{clean}" if prefix else src_path.name
+        dest = files_dir / clean
+    if not dest.exists():
+        dest.write_bytes(src_path.read_bytes())
+    return f"../files/{clean}"
+
+
 def _slug_to_filename(slug: str) -> str:
     return f"{slug}.html"
 
@@ -332,7 +352,8 @@ def _escape(s: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _process_html(raw_html: str, file_id_map: dict[int, Path],
-                  images_dir: Path, session: requests.Session,
+                  images_dir: Path, files_dir: Path,
+                  session: requests.Session,
                   slug_map: dict[str, str]) -> str:
     soup = BeautifulSoup(raw_html, "html.parser")
     content = (soup.find("div", class_="main-content")
@@ -363,14 +384,25 @@ def _process_html(raw_html: str, file_id_map: dict[int, Path],
             for attr in ["data-api-endpoint", "data-api-returntype", "loading", "verifier"]:
                 img.attrs.pop(attr, None)
 
-    # Rewrite internal Canvas page links to local .html files
+    # Rewrite internal Canvas page/file links to local paths
     for a in content.find_all("a", href=True):
         href = a["href"]
+
+        # Internal page links → local .html
         m = re.search(r"/pages/([^/?#]+)", href)
         if m:
             target_slug = m.group(1)
             if target_slug in slug_map:
                 a["href"] = f"../{slug_map[target_slug]}"
+            continue
+
+        # Canvas file links → local copy
+        fid = _file_id_from_url(href)
+        if fid:
+            local_path = file_id_map.get(fid)
+            if local_path and local_path.exists():
+                a["href"] = _copy_local_file(local_path, files_dir)
+                a.attrs.pop("target", None)
 
     return content.decode_contents() if hasattr(content, "decode_contents") else str(content)
 
@@ -539,8 +571,10 @@ def build_site(course_dir: Path, out_dir: Path,
     # Create output directories
     pages_out = out_dir / "pages"
     images_out = out_dir / "images"
+    files_out = out_dir / "files"
     pages_out.mkdir(parents=True, exist_ok=True)
     images_out.mkdir(parents=True, exist_ok=True)
+    files_out.mkdir(parents=True, exist_ok=True)
 
     # Write CSS and JS
     (out_dir / "style.css").write_text(CSS, encoding="utf-8")
@@ -566,7 +600,7 @@ def build_site(course_dir: Path, out_dir: Path,
             continue
 
         raw_html = html_path.read_text(encoding="utf-8")
-        body = _process_html(raw_html, file_id_map, images_out, session, slug_to_file)
+        body = _process_html(raw_html, file_id_map, images_out, files_out, session, slug_to_file)
         sidebar_html = _build_sidebar(modules_with_pages, slug)
 
         prev_page = ordered_pages[i - 1] if i > 0 else None
