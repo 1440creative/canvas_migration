@@ -283,6 +283,19 @@ def _file_id_from_url(url: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _filename_from_file_contents_url(url: str) -> str | None:
+    """Extract clean filename from a Canvas /file_contents/ URL."""
+    import urllib.parse
+    m = re.search(r"/file_contents/course%20files/(.+?)(?:\?|$)", url)
+    if not m:
+        m = re.search(r"/file_contents/course files/(.+?)(?:\?|$)", url)
+    if not m:
+        return None
+    path = urllib.parse.unquote(m.group(1))
+    name = Path(path).name
+    return _clean_filename(name)
+
+
 def _fetch_image(url: str, session: requests.Session) -> bytes | None:
     for attempt in range(1, 4):
         try:
@@ -322,6 +335,37 @@ def _fetch_and_copy_image(url: str, images_dir: Path,
 def _clean_filename(name: str) -> str:
     # Strip leading Canvas timestamp/id prefix: e.g. "1644356533_374__foo.pdf" → "foo.pdf"
     return re.sub(r"^\d+_\d+__", "", name)
+
+
+def _fetch_and_save_file(url: str, files_dir: Path,
+                         session: requests.Session) -> str | None:
+    """Fetch a Canvas file URL and save it locally. Returns ../files/<name> or None."""
+    # For /files/<id> URLs use download_frd=1; for file_contents use URL as-is
+    if "/file_contents/" in url:
+        download_url = re.sub(r"\?.*$", "", url)
+    else:
+        download_url = re.sub(r"\?.*$", "", url) + "?download_frd=1"
+    for attempt in range(1, 4):
+        try:
+            r = session.get(download_url, timeout=(10, 60), allow_redirects=True)
+            if r.status_code == 200:
+                # Try to get filename from Content-Disposition
+                cd = r.headers.get("Content-Disposition", "")
+                fname_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\r\n]+)', cd)
+                if fname_match:
+                    import urllib.parse
+                    raw_name = urllib.parse.unquote(fname_match.group(1).strip())
+                else:
+                    raw_name = Path(re.sub(r"\?.*$", "", url)).name or "file"
+                clean = _clean_filename(raw_name)
+                dest = files_dir / clean
+                if not dest.exists():
+                    dest.write_bytes(r.content)
+                return f"../files/{clean}"
+        except Exception:
+            pass
+        time.sleep(1.5 * attempt)
+    return None
 
 
 def _copy_local_file(src_path: Path, files_dir: Path) -> str:
@@ -396,12 +440,31 @@ def _process_html(raw_html: str, file_id_map: dict[int, Path],
                 a["href"] = f"../{slug_map[target_slug]}"
             continue
 
-        # Canvas file links → local copy
+        # Canvas file links → local copy (fetch from Canvas if not in dump)
         fid = _file_id_from_url(href)
         if fid:
             local_path = file_id_map.get(fid)
             if local_path and local_path.exists():
-                a["href"] = _copy_local_file(local_path, files_dir)
+                new_href = _copy_local_file(local_path, files_dir)
+            else:
+                new_href = _fetch_and_save_file(href, files_dir, session)
+            if new_href:
+                a["href"] = new_href
+                a.attrs.pop("target", None)
+            continue
+
+        # Canvas file_contents URLs (path-based, no file ID)
+        if "/file_contents/" in href:
+            clean = _filename_from_file_contents_url(href)
+            if clean:
+                dest = files_dir / clean
+                if dest.exists():
+                    a["href"] = f"../files/{clean}"
+                else:
+                    new_href = _fetch_and_save_file(href, files_dir, session)
+                    if new_href:
+                        # rename to clean filename if fetch used a different name
+                        a["href"] = f"../files/{clean}"
                 a.attrs.pop("target", None)
 
     return content.decode_contents() if hasattr(content, "decode_contents") else str(content)
