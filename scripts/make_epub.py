@@ -397,10 +397,14 @@ def _process_html(
     for a in content.find_all("a", href=True):
         href = a["href"]
 
-        # Staged pages: ../files/<name> → <base-url><name>
-        if staged and href.startswith("../files/") and files_base_url:
+        # Staged pages: ../files/<name> → <base-url><url-encoded-name>
+        if staged and href.startswith("../files/"):
+            import urllib.parse
             filename = href[len("../files/"):]
-            a["href"] = files_base_url.rstrip("/") + "/" + filename
+            if upload_files is not None:
+                upload_files[filename] = None  # sentinel — collected separately from staged files dir
+            if files_base_url:
+                a["href"] = files_base_url.rstrip("/") + "/" + urllib.parse.quote(filename, safe="")
             continue
 
         # file_contents links → resolve via local_files_dir or rewrite to base URL
@@ -620,12 +624,25 @@ def build_epub(course_dir: Path | None, out_path: Path,
     epub.write_epub(str(out_path), book)
 
     import shutil
-    if upload_dir and upload_files:
+    total_uploaded = 0
+    if upload_dir:
         upload_dir.mkdir(parents=True, exist_ok=True)
+        # Files matched from local_files_dir (course-dir mode)
         for clean_name, src_path in upload_files.items():
-            dest = upload_dir / clean_name
-            if not dest.exists():
-                shutil.copy2(src_path, dest)
+            if src_path is not None:
+                dest = upload_dir / clean_name
+                if not dest.exists():
+                    shutil.copy2(src_path, dest)
+        # Staged files dir — copy everything (staged mode)
+        if staged and source_dir:
+            staged_files = source_dir / "files"
+            if staged_files.is_dir():
+                for f in staged_files.iterdir():
+                    if f.is_file():
+                        dest = upload_dir / f.name
+                        if not dest.exists():
+                            shutil.copy2(f, dest)
+        total_uploaded = sum(1 for f in upload_dir.iterdir() if f.is_file())
 
     elapsed = time.perf_counter() - t0
     print(f"\n  Course:   {course_name}")
@@ -635,7 +652,7 @@ def build_epub(course_dir: Path | None, out_path: Path,
         print(f"  Files URL: {files_base_url}")
     print(f"  Output:   {out_path}")
     if upload_dir:
-        print(f"  Upload:   {upload_dir} ({len(upload_files)} files)")
+        print(f"  Upload:   {upload_dir} ({total_uploaded} files)")
     if unmatched_links:
         seen = set()
         print(f"\n  Unmatched Canvas links ({len(set(unmatched_links))}):")
