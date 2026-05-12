@@ -49,22 +49,21 @@ import requests
 
 DEFAULT_BRAND_DIR = REPO_ROOT / "assets" / "brand"
 
-WATERMARK_CSS_TEMPLATE = """
-body::before {{
-    content: "{text}";
-    position: fixed;
-    top: 40%;
-    left: 50%;
-    transform: translate(-50%, -50%) rotate({rotate_deg}deg);
-    font-size: 1.6em;
-    font-weight: bold;
-    color: {color};
-    opacity: {opacity};
-    white-space: nowrap;
-    pointer-events: none;
-    z-index: 9999;
-}}
-"""
+def _watermark_html(text: str, color: str, opacity: float, rotate_deg: int) -> str:
+    """Return an HTML div with inline SVG watermark to inject into each chapter body."""
+    return (
+        f'<div aria-hidden="true" style="position:absolute;top:0;left:0;width:100%;height:100%;'
+        f'overflow:hidden;pointer-events:none;z-index:0;">'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" '
+        f'style="position:absolute;top:0;left:0;">'
+        f'<text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" '
+        f'font-family="Georgia,serif" font-size="1.4em" font-weight="bold" '
+        f'fill="{color}" opacity="{opacity}" '
+        f'transform="rotate({rotate_deg} 0 0) translate(0,0)" '
+        f'transform-origin="50% 50%">{text}</text>'
+        f'</svg>'
+        f'</div>'
+    )
 
 MINIMAL_CSS = """
 body {
@@ -185,6 +184,32 @@ def _make_license_page(book: epub.EpubBook, brand: dict, brand_dir: Path) -> epu
         f'<p>{statement}</p>'
         f'<p><a href="{url}">{name}</a></p>'
         f'{badge_tag}'
+        '</body></html>'
+    ).encode("utf-8")
+    book.add_item(page)
+    return page
+
+
+def _make_toc_page(book: epub.EpubBook, toc_data: list[tuple[str, list[tuple[str, str]]]]) -> epub.EpubHtml:
+    """Build an HTML table of contents page. toc_data = [(mod_title, [(page_title, uid), ...]), ...]"""
+    rows = []
+    for mod_title, pages in toc_data:
+        rows.append(f'<h2 style="margin-top:1.2em; border-bottom:1px solid #ccc; padding-bottom:0.2em;">{mod_title}</h2>')
+        rows.append('<ul style="margin:0.4em 0 0.8em 1em; padding:0; list-style:disc;">')
+        for page_title, uid in pages:
+            rows.append(f'<li><a href="{uid}.xhtml">{page_title}</a></li>')
+        rows.append('</ul>')
+
+    page = epub.EpubHtml(title="Contents", file_name="chapters/toc_page.xhtml", lang="en")
+    page.content = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<!DOCTYPE html>'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">'
+        '<head><title>Contents</title>'
+        '<link rel="stylesheet" type="text/css" href="../style/main.css"/></head>'
+        '<body>'
+        '<h1>Contents</h1>'
+        + ''.join(rows) +
         '</body></html>'
     ).encode("utf-8")
     book.add_item(page)
@@ -387,7 +412,7 @@ def _process_html(
                     if upload_files is not None:
                         upload_files[clean] = local_path
                     if files_base_url:
-                        a["href"] = files_base_url.rstrip("/") + "/" + clean
+                        a["href"] = files_base_url.rstrip("/") + "/" + __import__("urllib.parse", fromlist=["quote"]).quote(clean, safe="")
                     continue
             if unmatched_links is not None:
                 unmatched_links.append(href)
@@ -403,7 +428,7 @@ def _process_html(
                 if upload_files is not None:
                     upload_files[clean] = local_path
                 if files_base_url:
-                    a["href"] = files_base_url.rstrip("/") + "/" + clean
+                    a["href"] = files_base_url.rstrip("/") + "/" + __import__("urllib.parse", fromlist=["quote"]).quote(clean, safe="")
             else:
                 if unmatched_links is not None:
                     unmatched_links.append(href)
@@ -478,14 +503,16 @@ def build_epub(course_dir: Path | None, out_path: Path,
 
     # Build CSS — append watermark rules if requested
     main_css = MINIMAL_CSS
+    watermark_html = ""
     if watermark:
         wm = brand.get("watermark", {})
-        main_css += WATERMARK_CSS_TEMPLATE.format(
+        watermark_html = _watermark_html(
             text=wm.get("text", "For personal use only"),
             opacity=wm.get("opacity", 0.08),
             color=wm.get("color", "#888888"),
             rotate_deg=wm.get("rotate_deg", -35),
         )
+        main_css += "\nbody { position: relative; }\n"
 
     css = epub.EpubItem(uid="style", file_name="style/main.css",
                         media_type="text/css", content=main_css.encode())
@@ -496,6 +523,7 @@ def build_epub(course_dir: Path | None, out_path: Path,
     embedded: dict[str, str] = {}
     upload_files: dict[str, Path] = {}
     unmatched_links: list[str] = []
+    toc_data: list[tuple[str, list[tuple[str, str]]]] = []
     page_count = 0
 
     # Branded title page — inserted at front of spine
@@ -552,6 +580,7 @@ def build_epub(course_dir: Path | None, out_path: Path,
                 f'<head><title>{title}</title>'
                 f'<link rel="stylesheet" type="text/css" href="../style/main.css"/>'
                 f'</head><body>'
+                f'{watermark_html}'
                 f'<h1>{title}</h1>'
                 f'{body_content}'
                 f'</body></html>'
@@ -563,7 +592,18 @@ def build_epub(course_dir: Path | None, out_path: Path,
             page_count += 1
 
         if mod_chapters:
-            toc.append(epub.Section(mod_title, mod_chapters))
+            chapter_links = [
+                epub.Link(c.file_name, c.title, c.file_name.replace("chapters/", "").replace(".xhtml", ""))
+                for c in mod_chapters
+            ]
+            toc.append((epub.Section(mod_title), chapter_links))
+            toc_data.append((mod_title, [(c.title, c.file_name.replace("chapters/", "").replace(".xhtml", "")) for c in mod_chapters]))
+
+    # TOC page — inserted after title page, before chapters
+    toc_page = _make_toc_page(book, toc_data)
+    # Find insertion point: after title page if branded, else after "nav"
+    insert_at = 2 if branded else 1
+    spine.insert(insert_at, toc_page)
 
     # Licence page — appended at back of spine
     if licensed:
