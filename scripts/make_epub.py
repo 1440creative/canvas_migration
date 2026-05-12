@@ -603,12 +603,6 @@ def build_epub(course_dir: Path | None, out_path: Path,
             toc.append((epub.Section(mod_title), chapter_links))
             toc_data.append((mod_title, [(c.title, c.file_name.replace("chapters/", "").replace(".xhtml", "")) for c in mod_chapters]))
 
-    # TOC page — inserted after title page, before chapters
-    toc_page = _make_toc_page(book, toc_data)
-    # Find insertion point: after title page if branded, else after "nav"
-    insert_at = 2 if branded else 1
-    spine.insert(insert_at, toc_page)
-
     # Licence page — appended at back of spine
     if licensed:
         license_page = _make_license_page(book, brand, resolved_brand_dir)
