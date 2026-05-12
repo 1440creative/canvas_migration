@@ -47,6 +47,25 @@ except ImportError:
 
 import requests
 
+DEFAULT_BRAND_DIR = REPO_ROOT / "assets" / "brand"
+
+WATERMARK_CSS_TEMPLATE = """
+body::before {{
+    content: "{text}";
+    position: fixed;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate({rotate_deg}deg);
+    font-size: 1.6em;
+    font-weight: bold;
+    color: {color};
+    opacity: {opacity};
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 9999;
+}}
+"""
+
 MINIMAL_CSS = """
 body {
     font-family: Georgia, 'Times New Roman', serif;
@@ -75,6 +94,101 @@ def _read_json(path: Path) -> dict | list | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _load_brand(brand_dir: Path) -> dict:
+    cfg_path = brand_dir / "brand.json"
+    try:
+        return json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _embed_image_file(book: epub.EpubBook, img_path: Path, uid: str) -> str | None:
+    """Add an image file to the epub and return its internal path, or None if missing."""
+    if not img_path.exists():
+        return None
+    img_bytes = img_path.read_bytes()
+    guessed, _ = mimetypes.guess_type(img_path.name)
+    mime = guessed or "image/png"
+    ext = img_path.suffix.lstrip(".") or "png"
+    item = epub.EpubImage()
+    item.uid = uid
+    item.file_name = f"images/{uid}.{ext}"
+    item.media_type = mime
+    item.content = img_bytes
+    book.add_item(item)
+    return item.file_name
+
+
+def _make_title_page(book: epub.EpubBook, course_name: str, author: str | None,
+                     brand: dict, brand_dir: Path) -> epub.EpubHtml:
+    """Build a branded title page and add it to the book."""
+    cfg = brand.get("branding", {})
+    institution = cfg.get("institution", "")
+    tagline = cfg.get("tagline", "")
+    logo_file = cfg.get("logo", "")
+
+    logo_tag = ""
+    if logo_file:
+        logo_path = brand_dir / logo_file
+        internal = _embed_image_file(book, logo_path, "brand_logo")
+        if internal:
+            logo_tag = f'<img src="../{internal}" alt="{institution}" style="max-width:260px; margin: 2em auto; display:block;"/>'
+
+    author_line = f"<p>{author}</p>" if author else ""
+    tagline_line = f'<p style="color:#666; font-style:italic;">{tagline}</p>' if tagline else ""
+
+    page = epub.EpubHtml(title="Title Page", file_name="chapters/title_page.xhtml", lang="en")
+    page.content = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<!DOCTYPE html>'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">'
+        '<head><title>Title Page</title>'
+        '<link rel="stylesheet" type="text/css" href="../style/main.css"/></head>'
+        '<body style="text-align:center; padding-top:4em;">'
+        f'{logo_tag}'
+        f'<h1 style="margin-top:1.5em;">{course_name}</h1>'
+        f'{author_line}'
+        f'{tagline_line}'
+        f'<p style="color:#888; margin-top:3em;">{institution}</p>'
+        '</body></html>'
+    ).encode("utf-8")
+    book.add_item(page)
+    return page
+
+
+def _make_license_page(book: epub.EpubBook, brand: dict, brand_dir: Path) -> epub.EpubHtml:
+    """Build a licence page and add it to the book."""
+    cfg = brand.get("license", {})
+    name = cfg.get("name", "")
+    url = cfg.get("url", "")
+    statement = cfg.get("statement", "")
+    badge_file = cfg.get("badge", "")
+
+    badge_tag = ""
+    if badge_file:
+        badge_path = brand_dir / badge_file
+        internal = _embed_image_file(book, badge_path, "license_badge")
+        if internal:
+            badge_tag = f'<a href="{url}"><img src="../{internal}" alt="{name}" style="max-width:120px; margin:1em auto; display:block;"/></a>'
+
+    page = epub.EpubHtml(title="Licence", file_name="chapters/license_page.xhtml", lang="en")
+    page.content = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<!DOCTYPE html>'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">'
+        '<head><title>Licence</title>'
+        '<link rel="stylesheet" type="text/css" href="../style/main.css"/></head>'
+        '<body style="text-align:center; padding-top:3em;">'
+        f'<h2>Licence</h2>'
+        f'<p>{statement}</p>'
+        f'<p><a href="{url}">{name}</a></p>'
+        f'{badge_tag}'
+        '</body></html>'
+    ).encode("utf-8")
+    book.add_item(page)
+    return page
 
 
 def _build_file_id_map(course_dir: Path) -> dict[int, Path]:
@@ -123,6 +237,29 @@ def _clean_filename(name: str) -> str:
     return re.sub(r"^\d+_\d+__", "", name)
 
 
+def _local_file_from_contents_url(url: str, local_files_dir: Path) -> Path | None:
+    """Map a Canvas file_contents URL to a file in local_files_dir by path."""
+    import urllib.parse
+    m = re.search(r"file_contents/course[%20 ]+files/(.*)", url, re.I)
+    if not m:
+        return None
+    rel = urllib.parse.unquote(m.group(1).split("?")[0]).lstrip("/")
+    # 1. Exact path match
+    candidate = local_files_dir / rel
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    # 2. Exact filename match (anywhere in tree)
+    name = Path(rel).name
+    for found in local_files_dir.rglob(name):
+        return found
+    # 3. Strip Canvas hash prefix (e.g. 1693940355_372__filename.pdf → filename.pdf)
+    clean_name = re.sub(r"^\d+_\d+__", "", name)
+    if clean_name != name:
+        for found in local_files_dir.rglob(clean_name):
+            return found
+    return None
+
+
 def _process_html(
     raw_html: str,
     page_slug: str,
@@ -133,6 +270,9 @@ def _process_html(
     files_base_url: str | None = None,
     staged: bool = False,
     staged_images_dir: Path | None = None,
+    local_files_dir: Path | None = None,
+    upload_files: dict[str, Path] | None = None,
+    unmatched_links: list[str] | None = None,
 ) -> str:
     """Extract body content, embed images, rewrite file links, return clean HTML string."""
     soup = BeautifulSoup(raw_html, "html.parser")
@@ -187,6 +327,14 @@ def _process_html(
             if guessed:
                 mime = guessed
             ext = local_path.suffix.lstrip(".") or ext
+        elif local_files_dir and "file_contents" in src:
+            local_path = _local_file_from_contents_url(src, local_files_dir)
+            if local_path:
+                img_bytes = local_path.read_bytes()
+                guessed, _ = mimetypes.guess_type(local_path.name)
+                if guessed:
+                    mime = guessed
+                ext = local_path.suffix.lstrip(".") or ext
         else:
             clean_src = src.split("?")[0]
             if clean_src in embedded:
@@ -230,15 +378,36 @@ def _process_html(
             a["href"] = files_base_url.rstrip("/") + "/" + filename
             continue
 
-        # Canvas file URLs → resolve via file_id_map, rewrite to base URL
+        # file_contents links → resolve via local_files_dir or rewrite to base URL
+        if "file_contents" in href:
+            if local_files_dir:
+                local_path = _local_file_from_contents_url(href, local_files_dir)
+                if local_path:
+                    clean = _clean_filename(local_path.name)
+                    if upload_files is not None:
+                        upload_files[clean] = local_path
+                    if files_base_url:
+                        a["href"] = files_base_url.rstrip("/") + "/" + clean
+                    continue
+            if unmatched_links is not None:
+                unmatched_links.append(href)
+            a["href"] = re.sub(r"\?.*$", "", href)
+            continue
+
+        # Canvas /files/<id> URLs → resolve via file_id_map, rewrite to base URL
         fid = _file_id_from_url(href)
-        if fid and files_base_url:
+        if fid:
             local_path = file_id_map.get(fid)
             if local_path:
                 clean = _clean_filename(local_path.name)
-                a["href"] = files_base_url.rstrip("/") + "/" + clean
+                if upload_files is not None:
+                    upload_files[clean] = local_path
+                if files_base_url:
+                    a["href"] = files_base_url.rstrip("/") + "/" + clean
             else:
-                # No local file — strip verifier/wrap params at minimum
+                if unmatched_links is not None:
+                    unmatched_links.append(href)
+                # Strip verifier/wrap params at minimum
                 a["href"] = re.sub(r"\?.*$", "", href)
 
     inner = content.decode_contents() if hasattr(content, "decode_contents") else str(content)
@@ -249,7 +418,13 @@ def build_epub(course_dir: Path | None, out_path: Path,
                source_dir: Path | None = None,
                title_override: str | None = None,
                author: str | None = None,
-               files_base_url: str | None = None) -> None:
+               files_base_url: str | None = None,
+               local_files_dir: Path | None = None,
+               upload_dir: Path | None = None,
+               branded: bool = False,
+               watermark: bool = False,
+               licensed: bool = False,
+               brand_dir: Path | None = None) -> None:
     t0 = time.perf_counter()
 
     staged = source_dir is not None
@@ -298,14 +473,35 @@ def build_epub(course_dir: Path | None, out_path: Path,
     if author:
         book.add_author(author)
 
+    resolved_brand_dir = brand_dir or DEFAULT_BRAND_DIR
+    brand = _load_brand(resolved_brand_dir) if (branded or watermark or licensed) else {}
+
+    # Build CSS — append watermark rules if requested
+    main_css = MINIMAL_CSS
+    if watermark:
+        wm = brand.get("watermark", {})
+        main_css += WATERMARK_CSS_TEMPLATE.format(
+            text=wm.get("text", "For personal use only"),
+            opacity=wm.get("opacity", 0.08),
+            color=wm.get("color", "#888888"),
+            rotate_deg=wm.get("rotate_deg", -35),
+        )
+
     css = epub.EpubItem(uid="style", file_name="style/main.css",
-                        media_type="text/css", content=MINIMAL_CSS.encode())
+                        media_type="text/css", content=main_css.encode())
     book.add_item(css)
 
     spine: list = ["nav"]
     toc: list = []
     embedded: dict[str, str] = {}
+    upload_files: dict[str, Path] = {}
+    unmatched_links: list[str] = []
     page_count = 0
+
+    # Branded title page — inserted at front of spine
+    if branded:
+        title_page = _make_title_page(book, course_name, author, brand, resolved_brand_dir)
+        spine.append(title_page)
 
     for mod in modules_data:
         if mod.get("published") is False:
@@ -342,7 +538,10 @@ def build_epub(course_dir: Path | None, out_path: Path,
             body_content = _process_html(
                 raw_html, slug, book, file_id_map, embedded, session,
                 files_base_url=files_base_url, staged=staged,
-                staged_images_dir=source_dir / "images" if staged else None)
+                staged_images_dir=source_dir / "images" if staged else None,
+                local_files_dir=local_files_dir,
+                upload_files=upload_files,
+                unmatched_links=unmatched_links)
 
             uid = f"page_{hashlib.md5(slug.encode()).hexdigest()[:10]}"
             chapter = epub.EpubHtml(title=title, file_name=f"chapters/{uid}.xhtml", lang="en")
@@ -366,6 +565,12 @@ def build_epub(course_dir: Path | None, out_path: Path,
         if mod_chapters:
             toc.append(epub.Section(mod_title, mod_chapters))
 
+    # Licence page — appended at back of spine
+    if licensed:
+        license_page = _make_license_page(book, brand, resolved_brand_dir)
+        spine.append(license_page)
+        toc.append(epub.Link("chapters/license_page.xhtml", "Licence", "license_page"))
+
     book.toc = toc
     book.spine = spine
     book.add_item(epub.EpubNcx())
@@ -374,6 +579,14 @@ def build_epub(course_dir: Path | None, out_path: Path,
     out_path.parent.mkdir(parents=True, exist_ok=True)
     epub.write_epub(str(out_path), book)
 
+    import shutil
+    if upload_dir and upload_files:
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        for clean_name, src_path in upload_files.items():
+            dest = upload_dir / clean_name
+            if not dest.exists():
+                shutil.copy2(src_path, dest)
+
     elapsed = time.perf_counter() - t0
     print(f"\n  Course:   {course_name}")
     print(f"  Pages:    {page_count}")
@@ -381,6 +594,16 @@ def build_epub(course_dir: Path | None, out_path: Path,
     if files_base_url:
         print(f"  Files URL: {files_base_url}")
     print(f"  Output:   {out_path}")
+    if upload_dir:
+        print(f"  Upload:   {upload_dir} ({len(upload_files)} files)")
+    if unmatched_links:
+        seen = set()
+        print(f"\n  Unmatched Canvas links ({len(set(unmatched_links))}):")
+        for lnk in unmatched_links:
+            clean = re.sub(r"\?.*$", "", lnk)
+            if clean not in seen:
+                seen.add(clean)
+                print(f"    ✗ {clean}")
     print(f"  Time:     {elapsed:.1f}s")
 
 
@@ -397,6 +620,19 @@ def main() -> int:
     p.add_argument("--files-base-url", default=None,
                    help="Base URL where PDFs/files will be hosted (e.g. http://server/dlog705/). "
                         "Canvas file links are rewritten to point here.")
+    p.add_argument("--local-files-dir", type=Path, default=None,
+                   help="Directory of manually downloaded Canvas files (images/PDFs). "
+                        "Matched to file_contents URLs by path before trying the API.")
+    p.add_argument("--upload-dir", type=Path, default=None,
+                   help="Collect all matched PDFs/files into this flat folder for web server upload.")
+    p.add_argument("--branded", action="store_true",
+                   help="Insert a branded title page at the front (uses assets/brand/brand.json).")
+    p.add_argument("--watermark", action="store_true",
+                   help="Overlay a diagonal watermark on every page via CSS.")
+    p.add_argument("--licensed", action="store_true",
+                   help="Append a licence page at the back.")
+    p.add_argument("--brand-dir", type=Path, default=None,
+                   help="Path to brand assets folder (default: assets/brand/).")
     args = p.parse_args()
 
     if not args.course_dir and not args.source_dir:
@@ -419,12 +655,26 @@ def main() -> int:
         out_path = args.out or (course_dir / f"{course_dir.name}.epub")
         label = course_dir.name
 
+    local_files_dir = args.local_files_dir.resolve() if args.local_files_dir else None
+    if local_files_dir and not local_files_dir.is_dir():
+        p.error(f"Local files directory not found: {local_files_dir}")
+
+    upload_dir = args.upload_dir.resolve() if args.upload_dir else None
+
     print(f"Building epub for {label}...")
+    brand_dir = args.brand_dir.resolve() if args.brand_dir else None
+
     build_epub(course_dir, out_path,
                source_dir=source_dir,
                title_override=args.title,
                author=args.author,
-               files_base_url=args.files_base_url)
+               files_base_url=args.files_base_url,
+               local_files_dir=local_files_dir,
+               upload_dir=upload_dir,
+               branded=args.branded,
+               watermark=args.watermark,
+               licensed=args.licensed,
+               brand_dir=brand_dir)
     return 0
 
 
