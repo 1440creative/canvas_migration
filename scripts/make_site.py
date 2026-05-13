@@ -283,6 +283,19 @@ def _file_id_from_url(url: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _filename_from_file_contents_url(url: str) -> str | None:
+    """Extract clean filename from a Canvas /file_contents/ URL."""
+    import urllib.parse
+    m = re.search(r"/file_contents/course%20files/(.+?)(?:\?|$)", url)
+    if not m:
+        m = re.search(r"/file_contents/course files/(.+?)(?:\?|$)", url)
+    if not m:
+        return None
+    path = urllib.parse.unquote(m.group(1))
+    name = Path(path).name
+    return _clean_filename(name)
+
+
 def _fetch_image(url: str, session: requests.Session) -> bytes | None:
     for attempt in range(1, 4):
         try:
@@ -319,6 +332,57 @@ def _fetch_and_copy_image(url: str, images_dir: Path,
     return f"../images/{dest_name}"
 
 
+def _clean_filename(name: str) -> str:
+    # Strip leading Canvas timestamp/id prefix: e.g. "1644356533_374__foo.pdf" → "foo.pdf"
+    return re.sub(r"^\d+_\d+__", "", name)
+
+
+def _fetch_and_save_file(url: str, files_dir: Path,
+                         session: requests.Session) -> str | None:
+    """Fetch a Canvas file URL and save it locally. Returns ../files/<name> or None."""
+    # For /files/<id> URLs use download_frd=1; for file_contents use URL as-is
+    if "/file_contents/" in url:
+        download_url = re.sub(r"\?.*$", "", url)
+    else:
+        download_url = re.sub(r"\?.*$", "", url) + "?download_frd=1"
+    for attempt in range(1, 4):
+        try:
+            r = session.get(download_url, timeout=(10, 60), allow_redirects=True)
+            if r.status_code == 200:
+                # Try to get filename from Content-Disposition
+                cd = r.headers.get("Content-Disposition", "")
+                fname_match = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\r\n]+)', cd)
+                if fname_match:
+                    import urllib.parse
+                    raw_name = urllib.parse.unquote(fname_match.group(1).strip())
+                else:
+                    raw_name = Path(re.sub(r"\?.*$", "", url)).name or "file"
+                clean = _clean_filename(raw_name)
+                dest = files_dir / clean
+                if not dest.exists():
+                    dest.write_bytes(r.content)
+                return f"../files/{clean}"
+        except Exception:
+            pass
+        time.sleep(1.5 * attempt)
+    return None
+
+
+def _copy_local_file(src_path: Path, files_dir: Path) -> str:
+    clean = _clean_filename(src_path.name)
+    dest = files_dir / clean
+    if dest.exists() and dest.read_bytes() == src_path.read_bytes():
+        return f"../files/{clean}"
+    # Avoid collision: prefix with file id from filename if dest is already taken by different content
+    if dest.exists():
+        prefix = re.match(r"^(\d+_\d+)__", src_path.name)
+        clean = f"{prefix.group(1)}__{clean}" if prefix else src_path.name
+        dest = files_dir / clean
+    if not dest.exists():
+        dest.write_bytes(src_path.read_bytes())
+    return f"../files/{clean}"
+
+
 def _slug_to_filename(slug: str) -> str:
     return f"{slug}.html"
 
@@ -332,7 +396,8 @@ def _escape(s: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _process_html(raw_html: str, file_id_map: dict[int, Path],
-                  images_dir: Path, session: requests.Session,
+                  images_dir: Path, files_dir: Path,
+                  session: requests.Session,
                   slug_map: dict[str, str]) -> str:
     soup = BeautifulSoup(raw_html, "html.parser")
     content = (soup.find("div", class_="main-content")
@@ -363,14 +428,44 @@ def _process_html(raw_html: str, file_id_map: dict[int, Path],
             for attr in ["data-api-endpoint", "data-api-returntype", "loading", "verifier"]:
                 img.attrs.pop(attr, None)
 
-    # Rewrite internal Canvas page links to local .html files
+    # Rewrite internal Canvas page/file links to local paths
     for a in content.find_all("a", href=True):
         href = a["href"]
+
+        # Internal page links → local .html
         m = re.search(r"/pages/([^/?#]+)", href)
         if m:
             target_slug = m.group(1)
             if target_slug in slug_map:
                 a["href"] = f"../{slug_map[target_slug]}"
+            continue
+
+        # Canvas file links → local copy (fetch from Canvas if not in dump)
+        fid = _file_id_from_url(href)
+        if fid:
+            local_path = file_id_map.get(fid)
+            if local_path and local_path.exists():
+                new_href = _copy_local_file(local_path, files_dir)
+            else:
+                new_href = _fetch_and_save_file(href, files_dir, session)
+            if new_href:
+                a["href"] = new_href
+                a.attrs.pop("target", None)
+            continue
+
+        # Canvas file_contents URLs (path-based, no file ID)
+        if "/file_contents/" in href:
+            clean = _filename_from_file_contents_url(href)
+            if clean:
+                dest = files_dir / clean
+                if dest.exists():
+                    a["href"] = f"../files/{clean}"
+                else:
+                    new_href = _fetch_and_save_file(href, files_dir, session)
+                    if new_href:
+                        # rename to clean filename if fetch used a different name
+                        a["href"] = f"../files/{clean}"
+                a.attrs.pop("target", None)
 
     return content.decode_contents() if hasattr(content, "decode_contents") else str(content)
 
@@ -470,35 +565,43 @@ def _build_sidebar(modules_with_pages: list[dict], current_slug: str) -> str:
 # Main builder
 # ---------------------------------------------------------------------------
 
-def build_site(course_dir: Path, out_dir: Path,
+def build_site(course_dir: Path | None, out_dir: Path,
+               source_dir: Path | None = None,
                module_positions: set[int] | None = None,
                title_override: str | None = None,
                include_unpublished: bool = False,
                exclude_titles: set[str] | None = None) -> None:
     t0 = time.perf_counter()
 
-    meta: dict = _read_json(course_dir / "course" / "course_metadata.json") or {}
-    course_name = title_override or meta.get("name") or course_dir.name
+    # Source-dir mode: read pre-staged, editable content instead of the raw dump
+    staged = source_dir is not None
 
-    modules_data: list = _read_json(course_dir / "modules" / "modules.json") or []
+    if staged:
+        meta: dict = _read_json(source_dir / "course_metadata.json") or {}
+        modules_data: list = _read_json(source_dir / "modules.json") or []
+        staged_pages_dir = source_dir / "pages"
+        slug_set: set[str] = {f.stem for f in staged_pages_dir.glob("*.html")}
+    else:
+        meta = _read_json(course_dir / "course" / "course_metadata.json") or {}
+        modules_data = _read_json(course_dir / "modules" / "modules.json") or []
+        file_id_map = _build_file_id_map(course_dir)
+        pages_dir = course_dir / "pages"
+        slug_map: dict[str, Path] = {}
+        if pages_dir.exists():
+            for page_dir in pages_dir.iterdir():
+                if not page_dir.is_dir():
+                    continue
+                slug = re.sub(r"^\d+_", "", page_dir.name)
+                slug_map[slug] = page_dir
+        session = requests.Session()
+        token = os.getenv("CANVAS_TARGET_TOKEN") or os.getenv("CANVAS_SOURCE_TOKEN")
+        if token:
+            session.headers["Authorization"] = f"Bearer {token}"
+
+    course_name = title_override or meta.get("name") or (source_dir or course_dir).name
+
     if not modules_data:
-        raise RuntimeError(f"No modules found in {course_dir}")
-
-    file_id_map = _build_file_id_map(course_dir)
-
-    pages_dir = course_dir / "pages"
-    slug_map: dict[str, Path] = {}
-    if pages_dir.exists():
-        for page_dir in pages_dir.iterdir():
-            if not page_dir.is_dir():
-                continue
-            slug = re.sub(r"^\d+_", "", page_dir.name)
-            slug_map[slug] = page_dir
-
-    session = requests.Session()
-    token = os.getenv("CANVAS_TARGET_TOKEN") or os.getenv("CANVAS_SOURCE_TOKEN")
-    if token:
-        session.headers["Authorization"] = f"Bearer {token}"
+        raise RuntimeError(f"No modules found")
 
     # Collect ordered pages across all modules (optionally filtered by position)
     ordered_pages: list[dict] = []
@@ -522,13 +625,18 @@ def build_site(course_dir: Path, out_dir: Path,
             title = (item.get("title") or "").strip()
             if not slug or not title:
                 continue
-            page_dir = slug_map.get(slug)
-            if not page_dir:
-                continue
+            if staged:
+                if slug not in slug_set:
+                    continue
+            else:
+                if slug not in slug_map:
+                    continue
             if exclude_titles and title.strip().lower() in {t.lower() for t in exclude_titles}:
                 continue
             filename = f"pages/{_slug_to_filename(slug)}"
-            entry = {"slug": slug, "title": title, "page_dir": page_dir, "file": filename}
+            entry = {"slug": slug, "title": title, "file": filename}
+            if not staged:
+                entry["page_dir"] = slug_map[slug]
             ordered_pages.append(entry)
             mod_pages.append(entry)
         modules_with_pages.append({"title": mod_title, "pages": mod_pages})
@@ -539,8 +647,10 @@ def build_site(course_dir: Path, out_dir: Path,
     # Create output directories
     pages_out = out_dir / "pages"
     images_out = out_dir / "images"
+    files_out = out_dir / "files"
     pages_out.mkdir(parents=True, exist_ok=True)
     images_out.mkdir(parents=True, exist_ok=True)
+    files_out.mkdir(parents=True, exist_ok=True)
 
     # Write CSS and JS
     (out_dir / "style.css").write_text(CSS, encoding="utf-8")
@@ -552,6 +662,17 @@ def build_site(course_dir: Path, out_dir: Path,
     if has_logo:
         (images_out / "sfu-logo.png").write_bytes(logo_src.read_bytes())
 
+    # In staged mode, bulk-copy images and files from the source dir
+    if staged:
+        for src_file in (source_dir / "images").iterdir():
+            dest = images_out / src_file.name
+            if not dest.exists():
+                dest.write_bytes(src_file.read_bytes())
+        for src_file in (source_dir / "files").iterdir():
+            dest = files_out / src_file.name
+            if not dest.exists():
+                dest.write_bytes(src_file.read_bytes())
+
     # Build slug→filename map for internal link rewriting
     slug_to_file: dict[str, str] = {p["slug"]: p["file"] for p in ordered_pages}
 
@@ -560,13 +681,17 @@ def build_site(course_dir: Path, out_dir: Path,
     for i, page in enumerate(ordered_pages):
         slug = page["slug"]
         title = page["title"]
-        page_dir = page["page_dir"]
-        html_path = page_dir / "index.html"
-        if not html_path.exists():
-            continue
 
-        raw_html = html_path.read_text(encoding="utf-8")
-        body = _process_html(raw_html, file_id_map, images_out, session, slug_to_file)
+        if staged:
+            body = (staged_pages_dir / f"{slug}.html").read_text(encoding="utf-8")
+        else:
+            page_dir = page["page_dir"]
+            html_path = page_dir / "index.html"
+            if not html_path.exists():
+                continue
+            raw_html = html_path.read_text(encoding="utf-8")
+            body = _process_html(raw_html, file_id_map, images_out, files_out, session, slug_to_file)
+
         sidebar_html = _build_sidebar(modules_with_pages, slug)
 
         prev_page = ordered_pages[i - 1] if i > 0 else None
@@ -611,9 +736,13 @@ def build_site(course_dir: Path, out_dir: Path,
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Build a static HTML site from an exported Canvas course")
-    p.add_argument("--course-dir", type=Path, required=True)
+    p.add_argument("--course-dir", type=Path, default=None,
+                   help="Path to the raw Canvas dump directory (required if --source-dir not given)")
+    p.add_argument("--source-dir", type=Path, default=None,
+                   help="Path to a staged editable source (from stage_site.py). "
+                        "Use instead of --course-dir to build from manually-edited content.")
     p.add_argument("--out", type=Path, default=None,
-                   help="Output directory (default: <course-dir>/site)")
+                   help="Output directory (default: <course-dir>/site or <source-dir>/site)")
     p.add_argument("--modules", default=None,
                    help="Comma-separated module position numbers to include (e.g. 1,2,3). "
                         "Omit to include all modules.")
@@ -625,9 +754,26 @@ def main() -> int:
                    help="Semicolon-separated page titles to omit (e.g. \"Contact Information and Assistance\").")
     args = p.parse_args()
 
-    course_dir = args.course_dir.resolve()
-    if not course_dir.is_dir():
-        p.error(f"Course directory not found: {course_dir}")
+    if not args.course_dir and not args.source_dir:
+        p.error("one of --course-dir or --source-dir is required")
+    if args.course_dir and args.source_dir:
+        p.error("--course-dir and --source-dir are mutually exclusive")
+
+    source_dir: Path | None = None
+    course_dir: Path | None = None
+
+    if args.source_dir:
+        source_dir = args.source_dir.resolve()
+        if not source_dir.is_dir():
+            p.error(f"Source directory not found: {source_dir}")
+        out_dir = args.out or (source_dir / "site")
+        label = source_dir.name
+    else:
+        course_dir = args.course_dir.resolve()
+        if not course_dir.is_dir():
+            p.error(f"Course directory not found: {course_dir}")
+        out_dir = args.out or (course_dir / "site")
+        label = course_dir.name
 
     module_positions: set[int] | None = None
     if args.modules:
@@ -640,9 +786,10 @@ def main() -> int:
     if args.exclude:
         exclude_titles = {t.strip() for t in args.exclude.split(";") if t.strip()}
 
-    out_dir = args.out or (course_dir / "site")
-    print(f"Building site for {course_dir.name}...")
-    build_site(course_dir, out_dir, module_positions=module_positions,
+    print(f"Building site for {label}...")
+    build_site(course_dir, out_dir,
+               source_dir=source_dir,
+               module_positions=module_positions,
                title_override=args.title,
                include_unpublished=args.include_unpublished,
                exclude_titles=exclude_titles)

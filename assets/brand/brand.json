@@ -1,0 +1,19 @@
+{
+  "branding": {
+    "institution": "Continuing Studies, Simon Fraser University",
+    "logo": "logo.png",
+    "tagline": ""
+  },
+  "watermark": {
+    "text": "Simon Fraser University — For personal use only",
+    "opacity": 0.08,
+    "color": "#888888",
+    "rotate_deg": -35
+  },
+  "license": {
+    "name": "Attribution-NonCommercial-NoDerivatives 4.0 International",
+    "url": "https://creativecommons.org/licenses/by-nc-nd/4.0/",
+    "badge": "cc-badge.png",
+    "statement": "This license requires that reusers give credit to the creator. It allows reusers to copy and distribute the material in any medium or format in unadapted form and for noncommercial purposes only."
+  }
+}

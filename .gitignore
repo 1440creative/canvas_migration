@@ -65,8 +65,11 @@ Thumbs.db
 /export/
 sandbox_export/
 
-# Generated website content (CSVs tracked, built sites are not)
+# Generated website content (only example CSV tracked)
 /websites/*/
+/websites/source/
+/websites/chrm-may2026-batch.csv
+/websites/chrm-may2026-batch.numbers
 
 # Zip bundles for sharing
 *.zip
