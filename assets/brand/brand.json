@@ -11,9 +11,9 @@
     "rotate_deg": -35
   },
   "license": {
-    "name": "Creative Commons Attribution-NonCommercial 4.0",
-    "url": "https://creativecommons.org/licenses/by-nc/4.0/",
+    "name": "Attribution-NonCommercial-NoDerivatives 4.0 International",
+    "url": "https://creativecommons.org/licenses/by-nc-nd/4.0/",
     "badge": "cc-badge.png",
-    "statement": "This material is licensed under a Creative Commons Attribution-NonCommercial 4.0 International Licence. You may share and adapt it for non-commercial purposes with appropriate attribution. See the full licence at the URL above."
+    "statement": "This license requires that reusers give credit to the creator. It allows reusers to copy and distribute the material in any medium or format in unadapted form and for noncommercial purposes only."
   }
 }

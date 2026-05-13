@@ -74,7 +74,7 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         pass  # suppress per-request noise
 
 
-def _build(source_dir: Path, out_dir: Path, module_positions, exclude_titles, title) -> None:
+def _build(source_dir: Path, out_dir: Path, module_positions, exclude_titles, title, include_unpublished=False) -> None:
     try:
         build_site(
             course_dir=None,
@@ -83,6 +83,7 @@ def _build(source_dir: Path, out_dir: Path, module_positions, exclude_titles, ti
             module_positions=module_positions,
             title_override=title,
             exclude_titles=exclude_titles,
+            include_unpublished=include_unpublished,
         )
         # Append livereload snippet to nav.js
         nav = out_dir / "nav.js"
@@ -91,7 +92,7 @@ def _build(source_dir: Path, out_dir: Path, module_positions, exclude_titles, ti
         print(f"  Build error: {exc}", file=sys.stderr)
 
 
-def _watch(source_dir: Path, out_dir: Path, module_positions, exclude_titles, title) -> None:
+def _watch(source_dir: Path, out_dir: Path, module_positions, exclude_titles, title, include_unpublished=False) -> None:
     pages_dir = source_dir / "pages"
     mtimes: dict[Path, float] = {}
 
@@ -108,7 +109,7 @@ def _watch(source_dir: Path, out_dir: Path, module_positions, exclude_titles, ti
         if changed or new_files:
             names = ", ".join(p.name for p in (changed + new_files))
             print(f"  Changed: {names} — rebuilding...")
-            _build(source_dir, out_dir, module_positions, exclude_titles, title)
+            _build(source_dir, out_dir, module_positions, exclude_titles, title, include_unpublished)
             _increment_version()
             print(f"  Done. Browser will reload.")
         mtimes = current
@@ -126,6 +127,8 @@ def main() -> int:
     p.add_argument("--title", default=None)
     p.add_argument("--exclude", default=None,
                    help="Semicolon-separated page titles to omit")
+    p.add_argument("--include-unpublished", action="store_true",
+                   help="Include modules marked published=false")
     args = p.parse_args()
 
     source_dir = args.source_dir.resolve()
@@ -153,13 +156,13 @@ def main() -> int:
     print(f"Source:  {source_dir}")
     print(f"Output:  {_out_dir}")
     print(f"\nBuilding initial site...")
-    _build(source_dir, _out_dir, module_positions, exclude_titles, args.title)
+    _build(source_dir, _out_dir, module_positions, exclude_titles, args.title, args.include_unpublished)
     print(f"Done.\n")
 
     # Start watcher thread
     watcher = threading.Thread(
         target=_watch,
-        args=(source_dir, _out_dir, module_positions, exclude_titles, args.title),
+        args=(source_dir, _out_dir, module_positions, exclude_titles, args.title, args.include_unpublished),
         daemon=True,
     )
     watcher.start()
