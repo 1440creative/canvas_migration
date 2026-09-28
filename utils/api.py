@@ -239,6 +239,43 @@ class CanvasAPI:
                 return url_part[url_part.find("<") + 1 : url_part.find(">")]
         return None
 
+    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
+        headers = dict(self.session.headers)
+        headers.pop("Content-Type", None)  # let requests set multipart boundary
+        max_attempts = 4
+        delay = 1.0
+        last_err: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
+                if 500 <= resp.status_code < 600:
+                    raise requests.HTTPError(f"{resp.status_code} server error", response=resp)
+                resp.raise_for_status()
+                return resp
+            except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as e:
+                last_err = e
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if attempt == max_attempts or not (status is None or status >= 500):
+                    break
+                jitter = random.uniform(0, 0.25 * delay)
+                time.sleep(delay + jitter)
+                delay *= 2
+        if isinstance(last_err, requests.HTTPError) and last_err.response is not None:
+            raise last_err
+        raise requests.HTTPError("multipart upload failed")
+
+    @staticmethod
+    def _json_or_empty(resp: requests.Response) -> dict:
+        if resp.status_code == 204 or not resp.content:
+            return {}
+        ctype = resp.headers.get("Content-Type", "")
+        if "json" in ctype.lower():
+            try:
+                return resp.json()
+            except ValueError:
+                return {}
+        return {}
+
 
 def list_blueprint_course_ids(
     api: "CanvasAPI",
@@ -291,53 +328,6 @@ def list_blueprint_course_ids(
 
     return sorted(set(ids))
 
-    def _multipart_post(self, url: str, *, data: Dict[str, Any], files: Dict[str, Any]) -> requests.Response:
-        """
-        Perform a multipart/form-data POST (used for Canvas file uploads).
-        Retries on 5xx/timeouts; strips default JSON content-type.
-        """
-        headers = self.session.headers.copy()
-        headers.pop("Content-Type", None)  # let requests set multipart boundary
-
-        max_attempts = 4
-        delay = 1.0
-        last_err: Exception | None = None
-        for attempt in range(1, max_attempts + 1):
-            try:
-                resp = self.session.post(url, data=data, files=files, headers=headers, timeout=DEFAULT_TIMEOUT)
-                # Treat 5xx as retryable
-                if 500 <= resp.status_code < 600:
-                    raise requests.HTTPError(f"{resp.status_code} server error", response=resp)
-                resp.raise_for_status()
-                return resp
-            except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as e:
-                last_err = e
-                status = getattr(getattr(e, "response", None), "status_code", None)
-                if attempt == max_attempts or not (status is None or status >= 500):
-                    break
-                jitter = random.uniform(0, 0.25 * delay)
-                time.sleep(delay + jitter)
-                delay *= 2
-        if isinstance(last_err, requests.HTTPError) and last_err.response is not None:
-            # Bubble up with context
-            raise last_err
-        raise requests.HTTPError("multipart upload failed")  # generic
-
-    @staticmethod
-    def _json_or_empty(resp: requests.Response) -> dict:
-        """
-        Return parsed JSON if the response looks like JSON; otherwise {}.
-        Safely handles 204, empty bodies, and malformed JSON.
-        """
-        if resp.status_code == 204 or not resp.content:
-            return {}
-        ctype = resp.headers.get("Content-Type", "")
-        if "json" in ctype.lower():
-            try:
-                return resp.json()
-            except ValueError:
-                return {}
-        return {}
 
 def _maybe_api(url_env: str, token_env: str) -> Optional["CanvasAPI"]:
     url = os.getenv(url_env)
