@@ -1,0 +1,246 @@
+course: PMC200
+module: 1
+title: Module 1 Self-Assessments
+
+assessments:
+
+  - id: sa1
+    title: "Self-Assessment 1: A Car Manufacturer Production Ramp"
+    questions:
+
+      - question: "What makes EV production ramp a project rather than part of ongoing operations?"
+        answers:
+          - "It is a temporary initiative with a defined goal (scaling up production), while operations will be the routine building and delivery of EV"
+          - "It is managed by engineers, while operations are managed by operations staff"
+          - "It always requires more resources than normal operations"
+          - "It focuses on building a product, while operations focus only on services"
+        correct: 0
+        explanation: "The EV ramp is temporary and unique — it ends once stable production is reached. Operations, by contrast, are ongoing, repeatable activities like assembling vehicles and running service centers."
+
+      - question: "Investors push the company to achieve full production two months earlier than scheduled, without additional funding. Based on the Triple Constraint, which adjustment is most realistic?"
+        answers:
+          - "Expecting quality to improve automatically as the schedule compresses"
+          - "Assuming stakeholder engagement will be less important under pressure"
+          - "Delivering fewer features or variants in early models to meet the timeline"
+          - "Believing the project can accelerate without any trade-offs"
+        correct: 2
+        explanation: "When time is shortened and cost is fixed, scope is usually reduced. The company may need to limit features or deliver fewer variants in early runs to meet the new deadline."
+
+      - question: "Why is delivering value central to the EV ramp project?"
+        answers:
+          - "Because the company's only purpose is to create physical products"
+          - "Because value delivery ensures alignment with customer expectations, investor confidence, and the company's strategic goals"
+          - "Because value completely replaces scope, time, and cost as the project's only concern"
+          - "Because value is optional in projects focused on brand reputation"
+        correct: 1
+        explanation: "Value delivery — including performance, innovation, brand image, and stakeholder trust — is why the project exists. The ramp is not just about trucks; it's about meeting the company's promise to customers and investors."
+
+      - question: "Why is project management especially critical in the EV truck ramp's complex environment?"
+        answers:
+          - "It guarantees production will always finish faster than expected"
+          - "It eliminates the need for communication with regulators, suppliers, or customers"
+          - "It provides planning, coordination, and risk oversight to help the company adapt to challenges such as new battery technology, supply chains, and quality control"
+          - "It completely removes all risks and uncertainties from the process"
+        correct: 2
+        explanation: "Project management does not eliminate risk but provides structure and oversight to navigate complexity. For this company, this includes managing suppliers, regulatory requirements, and technical challenges."
+
+      - question: "Which of the following best explains why the EV truck production ramp is considered a project rather than ongoing operations?"
+        answers:
+          - "It is a temporary, defined effort with a clear end (stable production achieved)"
+          - "It is designed to deliver value to stakeholders through new technology and market impact"
+          - "It faces risks and resource limits typical of projects"
+          - "It is a continuous activity like routine vehicle assembly and customer service"
+        correct: 0
+        explanation: "The ramp has a defined start and finish. Once production stabilizes, it transitions into ongoing operations — repeatable processes like assembly and service that continue indefinitely."
+
+  - id: sa2
+    title: "Self-Assessment 2: Lifecycle and Focus Areas"
+    questions:
+
+      - question: "In the Design Phase of a software project, which option correctly matches each process group with its activity?"
+        answers:
+          - "Initiating → Approve design work | Planning → Create the design plan | Executing → Build prototypes | Monitoring & Controlling → Review design quality | Closing → Sign off on design phase"
+          - "Initiating → Create the design plan | Planning → Build prototypes | Executing → Approve design work | Monitoring & Controlling → Sign off on design phase | Closing → Review design quality"
+          - "Initiating → Review design quality | Planning → Approve design work | Executing → Sign off on design phase | Monitoring & Controlling → Build prototypes | Closing → Create the design plan"
+          - "Initiating → Sign off on design phase | Planning → Review design quality | Executing → Create the design plan | Monitoring & Controlling → Approve design work | Closing → Build prototypes"
+        correct: 0
+        explanation: "Each focus area has a distinct role in the Design Phase: Initiating approves work, Planning sets the design plan, Executing builds prototypes, Monitoring & Controlling reviews quality, and Closing signs off."
+
+      - question: "Mid-project, a change request is submitted for an additional feature. The project manager evaluates its impact and adjusts the scope. Which focus area is active?"
+        answers:
+          - "Planning"
+          - "Executing"
+          - "Monitoring & Controlling"
+          - "Closing"
+        correct: 2
+        explanation: "Evaluating and adjusting scope is part of Monitoring & Controlling."
+
+      - question: "A project team begins coding before requirements are approved. Which frameworks are out of alignment?"
+        answers:
+          - "Initiating (focus area) skipped in Design (life cycle)"
+          - "Planning (focus area) skipped in Initiation (life cycle)"
+          - "Executing (focus area) active in Planning/Design (life cycle) before Planning is complete"
+          - "Closing (focus area) skipped in Rollout (life cycle)"
+        correct: 2
+        explanation: "They jumped into Execution before completing the Planning work in the Design phase."
+
+      - question: "A project manager is developing a communication plan, building the work breakdown structure (WBS), and finalizing a project schedule. Which focus area is this?"
+        answers:
+          - "Initiating"
+          - "Planning"
+          - "Executing"
+          - "Monitoring & Controlling"
+        correct: 1
+        explanation: "These activities are all core Planning management actions."
+
+      - question: "A university redesigns its curriculum. Faculty draft new course outlines (Executing), while the project manager reviews whether all accreditation requirements are met (Monitoring & Controlling). What does this show about the two frameworks?"
+        answers:
+          - "Life cycle phases define what's happening, and focus areas define how it's managed"
+          - "Process groups replace life cycle phases after initiation"
+          - "The Closing process group is not needed in education projects"
+          - "Life cycle phases are optional when focus areas are strong"
+        correct: 0
+        explanation: "The life cycle provides the roadmap (curriculum redesign), while focus areas manage the activities within."
+
+  - id: sa3
+    title: "Self-Assessment 3: Development Approaches, Delivery Methods, and Methodologies"
+    questions:
+
+      - question: "Which of the following best distinguishes a development approach from a methodology?"
+        answers:
+          - "The approach is about stakeholder communication, while methodology is about budgeting"
+          - "The approach is the overall strategy, while methodology provides specific processes and tools"
+          - "The approach describes team size, while methodology describes deliverables"
+          - "The approach is used only in Agile, while methodology is used only in Waterfall"
+        correct: 1
+        explanation: "A development approach is the overall strategy for delivering value, while a methodology is the framework of roles, processes, and tools used to implement that strategy."
+
+      - question: "A new hospital wing project is highly regulated, requires fixed budgets, and has stable requirements. Which development approach is most suitable?"
+        answers:
+          - "Agile"
+          - "Hybrid"
+          - "Waterfall"
+          - "Iterative"
+        correct: 2
+        explanation: "Waterfall (predictive) is best suited for projects with stable requirements and little expected change, such as regulated construction projects."
+
+      - question: "Which of the following statements about iterative and incremental delivery is correct?"
+        answers:
+          - "They are full development approaches, like Waterfall or Agile"
+          - "Iterative means refining a product through repeated cycles, while incremental means delivering usable components in stages"
+          - "Waterfall projects always use iterative and incremental delivery"
+          - "Incremental delivery produces a draft version that is revised over time"
+        correct: 1
+        explanation: "Iterative delivery involves refining through cycles of improvement; incremental delivery delivers usable parts in stages. They are techniques, not full approaches."
+
+      - question: "Which of the following projects would most likely benefit from a Hybrid development approach?"
+        answers:
+          - "Developing a mobile app that requires frequent user feedback"
+          - "Constructing a hospital wing with fixed scope and budget"
+          - "Expanding a transit system while also developing a passenger-facing app"
+          - "Performing routine monthly payroll processing"
+        correct: 2
+        explanation: "A Hybrid approach allows different parts of a project to use different strategies (e.g., Waterfall for construction, Agile for app development)."
+
+      - question: "Why is tailoring development approaches and delivery methods important for project success?"
+        answers:
+          - "It ensures the project always uses Agile methods"
+          - "It guarantees no changes will occur during the project"
+          - "It allows the project manager to select methods and tools that best fit the project's complexity, risks, and stakeholders"
+          - "It eliminates the need for industry standards or organizational practices"
+        correct: 2
+        explanation: "Tailoring ensures that development approaches, delivery methods, and supporting tools are adapted to the project's unique conditions, improving focus, alignment, and outcomes."
+
+  - id: exit_ticket
+    title: "Module 1: Self-Practice Questions (Exit Ticket)"
+    questions:
+
+      - question: "A team is delivering a software product in short cycles, with frequent feedback from users and continuous updates. What delivery approach are they most likely using?"
+        answers:
+          - "Predictive"
+          - "Iterative"
+          - "Agile"
+          - "Waterfall"
+        correct: 2
+        explanation: "Agile emphasizes short cycles, frequent feedback, and continuous delivery — key characteristics of this iterative and flexible development approach."
+
+      - question: "According to the PMBOK® Guide, which of the following best defines a project?"
+        answers:
+          - "A set of recurring business operations"
+          - "A temporary effort undertaken to create a unique result"
+          - "Any initiative managed by a team"
+          - "A collection of interrelated programs"
+        correct: 1
+        explanation: "The PMBOK Guide defines a project as temporary and intended to deliver a unique product, service, or result, distinguishing it from ongoing operations."
+
+      - question: "A construction company is planning and executing a new bridge project using a highly structured, phase-by-phase plan. What delivery approach does this represent?"
+        answers:
+          - "Incremental"
+          - "Agile"
+          - "Hybrid"
+          - "Waterfall"
+        correct: 3
+        explanation: "Waterfall is a predictive approach with sequential phases (e.g., design, build, and test). It fits structured projects like bridge construction, where upfront planning is critical."
+
+      - question: "What is the key distinction between Project Management focus areas and the project lifecycle?"
+        answers:
+          - "Focus areas are unique to Agile; lifecycle applies only to Waterfall"
+          - "Lifecycle describes phases over time; focus areas describe categories of work"
+          - "Focus areas define organizational structure; lifecycle defines contract terms"
+          - "Lifecycle refers to stakeholder management; focus areas refer to team dynamics"
+        correct: 1
+        explanation: "The project lifecycle outlines when phases happen (e.g., initiation, planning, execution), while focus areas (like planning or monitoring) describe types of activities that may occur across multiple phases."
+
+      - question: "Which project performance domain focuses on engaging with individuals and groups who are affected by or can affect the project?"
+        answers:
+          - "Uncertainty"
+          - "Team"
+          - "Stakeholders"
+          - "Delivery"
+        correct: 2
+        explanation: "The Stakeholders domain focuses on identifying, engaging, and managing individuals or groups affected by the project, ensuring their needs and influence are addressed."
+
+      - question: "What does the Planning process group typically involve?"
+        answers:
+          - "Finalizing deliverables and archiving documents"
+          - "Building stakeholder relationships"
+          - "Creating a schedule, defining scope, and assessing risk"
+          - "Monitoring performance metrics"
+        correct: 2
+        explanation: "The Planning Focus Area includes key activities like developing the schedule, scope, budget, and risk plan to guide execution."
+
+      - question: "A hybrid delivery approach is most appropriate when:"
+        answers:
+          - "The team prefers minimal planning before execution"
+          - "Requirements are fixed, and changes are unlikely"
+          - "Some components require structure, others need flexibility"
+          - "The organization only uses Kanban"
+        correct: 2
+        explanation: "A hybrid approach combines predictive and adaptive methods, ideal when part of the project benefits from detailed planning, while other parts require agility."
+
+      - question: "Which PM principle encourages teams to adjust their approach to fit the project context?"
+        answers:
+          - "Stakeholders"
+          - "Tailoring"
+          - "Systems Thinking"
+          - "Complexity"
+        correct: 1
+        explanation: "The Tailoring principle encourages adapting tools and processes to fit the unique context of the project, rather than applying a one-size-fits-all method."
+
+      - question: "Which term describes the ability to deliver usable components in stages, such as launching features of a website one at a time?"
+        answers:
+          - "Incremental"
+          - "Waterfall"
+          - "Iterative"
+          - "Sequential"
+        correct: 0
+        explanation: "Incremental delivery means launching usable chunks or components over time, such as deploying website features in stages that add up to the full product."
+
+      - question: "What is the primary purpose of project management, according to the PMBOK® Guide?"
+        answers:
+          - "To ensure project reports are submitted on time"
+          - "To optimize resource use"
+          - "To apply knowledge, skills, tools, and techniques to meet project requirements"
+          - "To reduce team size and increase efficiency"
+        correct: 2
+        explanation: "This is the PMBOK® Guide's formal definition of project management, emphasizing its purpose: to deliver what the project sets out to achieve effectively and efficiently."

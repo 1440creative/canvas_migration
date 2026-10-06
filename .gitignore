@@ -98,6 +98,9 @@ docs/import*
 logs/*
 logs/reports/s_and_r/
 
+# Claude Code memory
+memory/
+
 # Scratch state
 id_map.json
 .env
