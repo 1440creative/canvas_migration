@@ -44,7 +44,7 @@ def _load_env_if_opted_in() -> None:
 _load_env_if_opted_in()
 
 # --- Tunables ---------------------------------------------------------------
-DEFAULT_TIMEOUT: tuple[float, float] = (5, 30)  # (connect, read) seconds
+DEFAULT_TIMEOUT: tuple[float, float] = (5, 10)  # (connect, read) seconds
 DEFAULT_PER_PAGE = 100
 USER_AGENT = "CanvasMigrations/1.0 (+https://example.org)"  # customize
 API_PREFIX = "/api/v1"

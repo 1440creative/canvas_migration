@@ -28,7 +28,7 @@ class ContentStats:
 
 
 def _list_pages(api: CanvasAPI, course_id: int) -> List[Dict[str, Any]]:
-    items = api.get(f"/courses/{course_id}/pages")
+    items = api.get(f"/courses/{course_id}/pages", params={"include[]": "body"})
     return items if isinstance(items, list) else []
 
 
@@ -83,18 +83,7 @@ def _process_pages(
             continue
         stats.scanned += 1
 
-        try:
-            detail = api.get(_page_endpoint(course_id, slug))
-        except Exception as exc:
-            stats.failed += 1
-            log.warning("page fetch failed slug=%s err=%s", slug, exc)
-            continue
-
-        body = None
-        if isinstance(detail, dict):
-            body = _safe_str(detail.get("body"))
-        if body is None:
-            body = _safe_str(page.get("body"))
+        body = _safe_str(page.get("body"))
         if body is None:
             continue
 
@@ -148,18 +137,8 @@ def _process_assignments(
                 continue
 
         stats.scanned += 1
-        try:
-            detail = api.get(f"/courses/{course_id}/assignments/{assignment_id}")
-        except Exception as exc:
-            stats.failed += 1
-            log.warning("assignment fetch failed id=%s err=%s", assignment_id, exc)
-            continue
 
-        description = None
-        if isinstance(detail, dict):
-            description = _safe_str(detail.get("description"))
-        if description is None:
-            description = _safe_str(assignment.get("description"))
+        description = _safe_str(assignment.get("description"))
         if description is None:
             continue
 
@@ -218,18 +197,8 @@ def _process_discussions(
                 continue
 
         stats.scanned += 1
-        try:
-            detail = api.get(f"/courses/{course_id}/discussion_topics/{topic_id}")
-        except Exception as exc:
-            stats.failed += 1
-            log.warning("discussion fetch failed id=%s err=%s", topic_id, exc)
-            continue
 
-        message = None
-        if isinstance(detail, dict):
-            message = _safe_str(detail.get("message"))
-        if message is None:
-            message = _safe_str(topic.get("message"))
+        message = _safe_str(topic.get("message"))
         if message is None:
             continue
 
